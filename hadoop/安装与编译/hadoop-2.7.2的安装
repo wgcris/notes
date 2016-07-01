@@ -1,0 +1,66 @@
+1. SSH配置
+(1) 启动ssh免密码登陆
+在/etc/ssh/sshd_config中去掉如下两行的注释:
+#RSAAuthentication yes
+#PubkeyAuthentication yes
+(2) 生成公私钥对
+ssh-keygen -t rsa
+(3) 将公钥导入authorized_keys
+cat id_rsa.pub >> authorized_keys
+
+2. 安装java (卸载openjdk再安装jdk)
+
+3.安装hadoop
+3.1 解压hadoop到安装目录(这里为/home/zcy/software)
+3.2 创建文件夹tmp,hdfs,hdfs/data,hdfs/name
+3.3 配置
+3.3.1 etc/hadoop/core-site.xml增加如下配置
+	<property>
+		<name>fs.defaultFS</name>
+		<value>hdfs://localhost:9000</value>
+	</property>
+	<property>
+		<name>hadoop.tmp.dir</name>
+		<value>/home/zcy/software/hadoop-2.7.2/tmp</value>
+	</property>
+	<property>
+		<name>io.file.buffer.size</name>
+		<value>131702</value>
+	</property>
+
+3.3.2 etc/hadoop/hdfs-site.xml增加如下配置
+	<property>
+		<name>dfs.namenode.name.dir</name>
+		<value>/home/zcy/software/hadoop-2.7.2/dfs/name</value>
+	</property>
+	<property>
+		<name>dfs.datanode.data.dir</name>
+		<value>f/home/zcy/software/hadoop-2.7.2/dfs/data</value>
+	</property>
+	<property>
+		<name>dfs.replication</name>
+		<value>1</value>
+	</property>
+
+3.3.3 etc/hadoop/mapred-site.xml增加如下配置
+	<property>
+		<name>mapreduce.framework.name</name>
+		<value>yarn</value>
+	</property>
+3.3.4 etc/hadoop/yarn-site.xml增加如下配置
+	<property>
+		<name>yarn.nodemanager.aux-services</name>
+		<value>mapreduce_shuffle</value>
+	</property>
+
+3.3.5 确保hadoop-env.sh, yarn-env.sh中的JAVA_HOME配置正确
+
+4. 使用
+4.1 格式化hdfs
+bin/hdfs namenode -format
+4.2 启动dfs
+sbin/start-dfs.sh
+4.3 启动yarn
+sbin/start-yarn.sh
+
+

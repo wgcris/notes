@@ -1,0 +1,27 @@
+(1) Active与Standy的切换的两种方式
+Active与Standy的切换是管理员admin或是自动切换来操作
+(2) 手动切换
+关闭自动切换。首先是从Active到Standy的切换，然后是从Standy到Active的切换。
+(3) 自动切换
+RM可以哦那个过基于zookeeper的ActiveStandbyElector来确定哪个RM是Active。当ACTIVE死掉或反应很慢的时候，RM自动去选择哪个作为Active去接管工作。这里这里没有必要像hdfs的ha一样启动一个单独的zkfc守护线程。RM自己已经集成了失败检测和选举的功能。
+(4) Client, ApplicationMaster and NodeManager on RM failover
+由多个RM的时候，client和node的配置里面需要勒出所有的RM。client,AMs,NMs试图使用轮训的方式连接所有的RMs，直到找到一个Active RM。假如一个Active死掉了，他们会恢复轮询的操作直到找到新的Active。默认的retry使用ConfiguredRMFailoverProxyProvider类。可以覆盖该类，并通过yarn.client.failover-proxy-provider来重新设置。
+(5) Recovering prevous active-RM’s state
+ResourceManger Restart开启的时候，当一个RM变为Active状态的后,加载RM的状态并尽可能的继续执行原来的Actvie剩下的工作。一个attempt(应用实例)是由一个正常的app产生的，app周期的检查以避免丢失任何工作。state-store必须让Active和Standy都可见。当前由两个RMStateStore类让状态永久存在，FileSystemRMStateStore and ZKRMStateStore。ZKRMStateStore意味着任何时刻只允许一个RM写访问(?????)，因此推荐它使用在HA集群中。当使用ZKRMStateStore的时候不必考虑fencing机制以避免脑裂现象(多个Active一起运行)(?????不用fencing的具体原因?????如果Active反应很慢了，这个Active怎么知道自己有问题，怎么告诉Standy去转换????? Ans: CDH里面的说明是active在ZK上/hadoop-ha目录创建一个lock文件，standy会不断的查询这个lock是否存在，如果没了，表示原来的active转化为standy或死掉了,自己尝试去创建一个lock文件去尝试变为active,不知道原版的hadoop是如何做的?但是这仍然无法解释active反应很慢怎么自己死掉或变为standby)。zookeeper不要设置zookeeper.DigestAuthenticationProvider.superDigest属性避免zookeeper的admin访问yarn用户证书信息。
+
+(6) 配置
+https://hadoop.apache.org/docs/r2.7.2/hadoop-yarn/hadoop-yarn-site/ResourceManagerHA.html
+
+(7) 管理员命令
+(a)查看rm1的状态的命令
+yarn rmadmin -getServiceState rm1
+(b)转换命令
+yarn rmadmin -transitionToStandby rm1
+如果配置了自动切换，不能使用手动转换命令，除非使用–forcemanual选项。
+
+关于ResourceManger Restart的分析
+
+
+
+
+

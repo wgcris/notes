@@ -1,0 +1,36 @@
+需要在docker启动参数增如下选项--bip=172.88.42.1/16
+service docker start会调用/usr/lib/systemd/system/docker.service脚本
+	[Unit]
+	Description=Docker Application Container Engine
+	Documentation=http://docs.docker.com
+	After=network.target
+	Wants=docker-storage-setup.service
+
+	[Service]
+	Type=notify
+	EnvironmentFile=-/etc/sysconfig/docker
+	EnvironmentFile=-/etc/sysconfig/docker-storage
+	EnvironmentFile=-/etc/sysconfig/docker-network
+	Environment=GOTRACEBACK=crash
+	ExecStart=/usr/bin/docker daemon $OPTIONS \
+		        $DOCKER_STORAGE_OPTIONS \
+		        $DOCKER_NETWORK_OPTIONS \
+		        $ADD_REGISTRY \
+		        $BLOCK_REGISTRY \
+		        $INSECURE_REGISTRY
+	LimitNOFILE=1048576
+	LimitNPROC=1048576
+	LimitCORE=infinity
+	MountFlags=slave
+	TimeoutStartSec=1min
+	Restart=on-failure
+
+	[Install]
+	WantedBy=multi-user.target
+
+因此可以通过更改/etc/sysconfig/docker或/etc/sysconfig/docker-storage或/etc/sysconfig/docker-network实现
+这里修改/etc/sysconfig/docker-network为如下内容即可:
+DOCKER_NETWORK_OPTIONS="--bip=172.88.42.1/16"
+
+如果是ubuntu在/etc/default/docker中修改
+

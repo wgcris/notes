@@ -1,0 +1,9 @@
+(1) 启动ResourceManager的流程
+根据脚本的分析，会执行org.apache.hadoop.yarn.server.resourcemanager.ResourceManager，无参数传入。
+ResourceManager继承自CompositeService，会依次调用init和start方法启动服务。
+	ResourceManager:serviceInit
+	
+	ResourceManager:serviceStart
+
+
+

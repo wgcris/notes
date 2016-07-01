@@ -1,0 +1,74 @@
+新增加NS操作参考
+0.前期环境准备
+? 打通hadp用户nn1到nn5,nn6的ssh
+? 打通nn5,nn6的hadp用户的双方的ssh，两台机器互通,不需要输入密码
+? 在nn5,nn6新建mapred，yarn用户，并将hadp,yarn,mapred用户加入hadoop组
+? 调整linux网络参数和其余NS的NameNode保持一致
+? 把新增节点的host加入到集群的/etc/hosts
+1.找到奇数台机器，并安装配置ZooKeeper
+zkHost1-zkHost5
+sh zkServer.sh start
+2.找到奇数台机器，安装配置hadoop，并启动JournalNode
+jnHost1-jnHost5
+hadoop-daemon.sh start journalnode
+3.增加配置(假设添加NS3)
+修改core-site.xml(大体需要注意)
+<property>
+  <name>fs.defaultFS</name>
+  <value>hdfs://ns3</value>
+</property>
+如果和原来的NS不共用ZK，修改填写ZK地址
+<property>
+   <name>ha.zookeeper.quorum</name>
+   <value>zkHost1:2181,zkHost2:2181,zkHost3:2181,zkHost4:2181,zkHost5:2181</value>
+</property>
+修改hdfs-site.xml,增加NS3
+<property>
+  <name>dfs.nameservices</name>
+  <value>ns1,ns2,ns3</value>
+</property>
+增加配置
+<property>
+  <name>dfs.ha.namenodes.ns3</name>
+  <value>nn5,nn6</value>
+</property>
+<property>
+  <name>dfs.namenode.rpc-address.ns3.nn5</name>
+  <value>nn5Host:8020</value>
+</property>
+<property>
+  <name>dfs.namenode.rpc-address.ns3.nn6</name>
+  <value>nn6Host:8020</value>
+</property>
+<property>
+  <name>dfs.namenode.http-address.ns3.nn5</name>
+  <value>nn5Host:50070</value>
+</property>
+<property>
+  <name>dfs.namenode.http-address.ns3.nn6</name>
+  <value>nn6Host:50070</value>
+</property>
+<property>
+    <name>dfs.namenode.servicerpc-address.ns3.nn5</name>
+    <value>nn5Host:8021</value>
+</property>
+<property>
+    <name>dfs.namenode.servicerpc-address.ns3.nn6</name>
+    <value>nn6Host:8021</value>
+</property>
+<property>
+    <name>dfs.client.failover.proxy.provider.ns3</name>
+    <value>org.apache.hadoop.hdfs.server.namenode.ha.ConfiguredFailoverProxyProvider</value>
+</property>
+修改JournalNode的上传地址和目录
+<property>
+    <name>dfs.namenode.shared.edits.dir</name>
+    <value>qjournal://jnHost1:8485;jnHost2:8485;jnHost3:8485;jnHost4:8485;jnHost5:8485/ns3</value>
+</property>
+4.执行操作
+找到ns1的集群cid(例如:CID-338ca6d3-15bb-4941-bb1a-8faa3c3ba79d)
+在nn5上指定clusterId执行
+hdfs namenode -format -clusterId cid
+hadoop-daemon.sh start namenode
+在nn6上执行
+hdfs namenode

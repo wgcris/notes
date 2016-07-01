@@ -1,0 +1,67 @@
+<?xml version='1.0'?>
+<allocations>
+    <queue name="default">
+        <minResources>0 mb,0vcores</minResources>
+        <maxResources>573440 mb,280vcores</maxResources>
+        <maxRunningApps>10</maxRunningApps>
+        <weight>1.0</weight>
+        <schedulingPolicy>fair</schedulingPolicy>
+    </queue>
+	默认的队列，即不指定队列的名称的时候，使用的资源队列。
+	但是如果不yarn.scheduler.fair.user-as-default-queue设置为true(默认为true)，会使用与用户同名的队列。
+	因此，如果yarn.scheduler.fair.user-as-default-queue设置为true，没有定义与用户同名的队列，且没有指定队列的情况下，会使用default队列。
+    <user name="default">
+        <maxRunningApps>5</maxRunningApps>
+    </user>
+	默认的用户,猜测是所有满足default队列对应的用户的配置。(源码尚未理清，仅仅为猜测！！！！！待更新)
+
+queue
+	minResources: 最小使用的资源量。
+	maxResources: 最多使用的资源量。
+	maxRunningApps: 最多同时运行的资源池的数目。
+	aclSubmitApps: 可向该队列提供的应用程序的用户列表。
+	aclAdministerApps: 该队列的管理员列表。
+	weight:	分配剩余资源的比重。具体讲剩余资源为给所有未达到所需资源的资源池进行分配的权重。
+	schedulingPolicy: 队列的调度策略。
+	同时内部还可以分配子队列。
+user
+	maxRunningApps: 该用户最多同时运行的用户数。
+
+参考配置:
+    <queue name="bdp_jmart_bda">
+        <minResources>0 mb,0 vcores</minResources>
+        <maxResources>0 mb,0 vcores</maxResources>
+        <maxRunningApps>200</maxRunningApps>
+        <aclSubmitApps>mart_bda</aclSubmitApps>
+        <aclAdministerApps>mart_bda</aclAdministerApps>
+        <weight>1.0</weight>
+        <schedulingPolicy>fair</schedulingPolicy>
+        <queue name="bdp_jmart_bda_hive">                           
+            <minResources>0 mb,0vcores</minResources> 
+            <maxResources>0 mb,0vcores</maxResources> 
+            <maxRunningApps>200</maxRunningApps>               
+            <aclSubmitApps>mart_bda</aclSubmitApps>            
+            <aclAdministerApps>mart_bda</aclAdministerApps>    
+            <weight>2.0</weight>                               
+            <schedulingPolicy>fair</schedulingPolicy>          
+        </queue>
+        <queue name="bdp_jmart_bda_shark">                           
+            <minResources>0 mb,0vcores</minResources> 
+            <maxResources>0 mb,0vcores</maxResources> 
+            <maxRunningApps>20</maxRunningApps>               
+            <aclSubmitApps>mart_bda</aclSubmitApps>            
+            <aclAdministerApps>mart_bda</aclAdministerApps>    
+            <weight>1.0</weight>                               
+            <schedulingPolicy>FIFO</schedulingPolicy>          
+        </queue>
+    </queue>
+    <user name="mart_bda">
+        <maxRunningApps>200</maxRunningApps>
+    </user>
+
+userMaxAppsDefault: 设置最大的应用程序的限制的默认值。如果配置就覆盖它。
+defaultQueueSchedulingPolicy: 设置默认的队列调度策略。如果配置就覆盖它。
+参考配置
+    <userMaxAppsDefault>900</userMaxAppsDefault>
+    <defaultQueueSchedulingPolicy>fair</defaultQueueSchedulingPolicy>
+</allocations>

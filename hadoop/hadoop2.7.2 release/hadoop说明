@@ -1,0 +1,75 @@
+(1) HADOOP-12577
+修改pom.xml文件
+
+(2) HADOOP-12526
+pom.xml中由重复的依赖
+
+(3) HADOOP-12465
+文档描述错误
+
+(4) HADOOP-12464
+假如ipc client线程关闭，有事会开启故障恢复连到另外一个namenode。
+
+(5) HADOOP-12451
+windows相关
+
+(6) HADOOP-12415
+pom.xml
+
+(7) HADOOP-12413
+isUserInList函数没有考虑到组为空的情况。
+
+(8) HADOOP-12359
+文档错误
+
+(9) HADOOP-12304
+修改DelegateToFileSystem的默认端口号。
+因为AbstractFileSystem::getUri认为小于0的才是默认端口号。所以，未定义端口设置为-1，而不是0.
+
+(10) HADOOP-12280
+单元测试相关
+
+(11) HADOOP-12232
+tomcat版本升级
+
+(12) HADOOP-12230
+pom.xml
+
+(13) HADOOP-12213
+关闭YarnClient的时候可能会出现InterruptedException，将处理该异常的日志等级从erro调整到warn
+
+(14) HADOOP-12191
+Bzip2Factory::isNativeBzip2Loaded不是线程安全的。
+
+(15) HADOOP-12186
+ActiveStandbyElector不该调用monitorLockNodeAsync查看节点是否存在。
+
+(16) HADOOP-12006
+修改文档
+
+(17) HADOOP-11932
+MetricsSinkAdapter中，出现一种情况，关闭了该线程，RM卡住。
+MetricsSinkAdapter::stop没有真正关闭线程。(?????)
+
+(18) HADOOP-11812
+完善ViewFileSystem以加速split的计算。
+
+(19) HADOOP-11491
+修改HarFs(什么文件系统?????)构造函数改为不要求认证
+
+(20) HADOOP-10365
+修改在finally中close流。
+这里注意使用try()这个jdk1.7开始有的新特性。
+
+(21) HADOOP-9242
+pom.xml
+
+(22) HADOOP-8151
+SnappyCompressor.c代码中抛出异常的写法出现错误。
+
+(23) HADOOP-7139
+允许追加已存在的SequenceFile。
+
+(24) HADOOP-5323
+更新文档
+

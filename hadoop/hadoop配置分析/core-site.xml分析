@@ -1,0 +1,60 @@
+(1) fs.defaultFS
+  <name>fs.defaultFS</name>
+  <value>hdfs://ns1</value>
+说明: 为一个默认集群的URI. 当存在多个HDFS集群的时候，如果不知名哪个集群的默认集群名字。
+这里的ns1为HDFS集群的逻辑名。为hdfs-site.xml中dfs.nameservices的一个。
+(2) hadoop.tmp.dir
+  <name>hadoop.tmp.dir</name>
+  <value>/data0/hadoop_tmp</value>
+说明: 临时目录的根目录，默认值为/tmp/hadoop-${user.name}
+(3) ha.zookeeper.quorum
+   <name>ha.zookeeper.quorum</name>
+   <value>BJHC-Client-77107.hadoop.jd.local:2181,BJHC-Client-77108.hadoop.jd.local:2181,BJHC-Client-77109.hadoop.jd.local:2181</value>
+说明: zookeeper集群的地址与端口。数量为2n+1,n>=1
+(4) ha.zookeeper.parent-znode
+   <name>ha.zookeeper.parent-znode</name>
+   <value>/ns1-hadoop-ha</value>
+说明: zookeeper的根节点名称。
+(5) ha.zookeeper.session-timeout.ms
+   <name>ha.zookeeper.session-timeout.ms</name>
+   <value>5000</value>
+说明: ZKFC进程连接zookeeper会话的超时时间
+(6) io.file.buffer.size
+   <name>io.file.buffer.size</name>
+   <value>131072</value>
+说明: HDFS创建和读取过程中缓冲的内存的大小，必须是4K的整数倍。
+(7) io.compression.codecs
+  <name>io.compression.codecs</name>
+  <value>org.apache.hadoop.io.compress.GzipCodec,org.apache.hadoop.io.compress.DefaultCodec,org.apache.hadoop.io.compress.BZip2Codec,com.hadoop.compression.lzo.LzoCodec,com.hadoop.compression.lzo.LzopCodec,org.apache.hadoop.io.compress.SnappyCodec</value>
+说明: 设置支持的压缩算法列表
+(8) io.native.lib.available
+  <name>io.native.lib.available</name>
+  <value>true</value>
+  <description>hadoop.native.lib is deprecated</description>
+说明: 是否使用hadoop本地库，
+$HADOOP_HOME/lib/native为本地库目录
+(9) hadoop.security.authorization
+  <name>hadoop.security.authorization</name>
+  <value>true</value>
+说明: 开启安全认证的机制，具体设置于$HADOOP_HOME/etc/hadoop/hadoop-policy.xml
+(10) fs.trash.interval
+  <name>fs.trash.interval</name>
+  <value>1440</value>
+说明: HDFS删除文件会放到/user/$user/.Trash文件夹中，如果达到fs.trash.interval时间不恢复就会彻底删除文件。
+(11)io.compression.codec.lzo.class
+  <name>io.compression.codec.lzo.class</name>
+  <value>com.hadoop.compression.lzo.LzoCodec</value>
+说明: 设置lzo压缩算法的类。需要在linux系统中另行安装lzo相关库
+(12) net.topology.script.file.name
+  <name>net.topology.script.file.name</name>
+  <value>/software/servers/hadoop-2.2.0/etc/hadoop/rack.py</value>
+说明: 感知机架的脚本的路径。输入为一个IP，返回为机架的名称。
+		 这里的rack.py脚本程序读取rack.data的数据返回具体的机架名称。
+(13) hadoop.proxyuser.jd_ad.hosts
+    <name>hadoop.proxyuser.jd_ad.hosts</name>
+    <value>172.17.17.38</value>
+说明: oozie代理用户
+(14) hadoop.proxyuser.jd_ad.hosts
+    <name>hadoop.proxyuser.jd_ad.groups</name>
+    <value>jd_ad</value>
+说明: oozie代理用户的组

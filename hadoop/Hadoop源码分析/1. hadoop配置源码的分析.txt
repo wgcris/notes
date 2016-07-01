@@ -1,0 +1,71 @@
+﻿hadoop配置的类为org.apache.hadoop.conf.Configuration
+(1)Configuration的成员变量
+	(1.1) quietmode
+		为false可以打开适用于开发人员的调试模式
+	(1.2) resources
+		记录某种资源，为ArrayList类型
+	(1.3) finalParameters
+		记录配置文件中设置为final变量，为set类型
+	(1.4) loadDefaults
+ 		是否加载静态资源，为CopyOnWriteArrayList类型
+ 	(1.5)defaultResources
+ 		默认的资源
+ 	(1.6)properties
+ 		记录配置文件的key-value对
+ 	(1.7)overlay
+ 		记录应用通过set()设置的配置项，而不是配置文件的。
+ 	(1.8)classLoader
+ 		类加载器
+ 	(1.9)REGISTRY
+ 		是一个静态的WeakHashMap变量。每次调用Configuration构造函数的时候都会将这个Configuration对象put如其中
+
+(2) 资源加载
+	(2.1)addResource											//好像我没有用过
+		以Path参数类型为例说明
+ 		 addResource(Path file)
+ 			addResourceObject
+ 				resources.add(resource)
+ 					//将名字为path.toString(),resource为file的对象加入到resources中
+ 				reloadConfiguration
+ 					properties被清空
+ 					finalParameters被清空
+ 	(2.2)说明加载HdfsConfiguration的过程，一般使用如下代码访问
+			Configuration conf = new HdfsConfiguration();
+			加载类的时候会执行父类Configuration的静态代码段，再执行子类HdfsConfiguration静态代码段。
+				父类静态代码段:
+					加载类加载器cl
+					判断是否有hadoop-site.xml。如果有，则警告。
+					addDefaultResource("core-default.xml")
+						判断defaultResources是否存在"core-default.xml"。
+						如果不存在就加入其中，遍历REGISTRY,如果其中有一项loadDefaults为true，就执行conf.reloadConfiguration清空properties和finalParameters。
+					addDefaultResource("core-site.xml")
+						同上
+				子类静态代码段:
+					addDeprecatedKeys				//增加被遗弃设置的提示
+					Configuration.addDefaultResource("hdfs-default.xml");
+	    		Configuration.addDefaultResource("hdfs-site.xml");
+   		上面的过程紧紧是将配置清空，实际调用采用延时加载的方式，即用时在加载配置，因此分析getProps函数
+   		getProps
+   			properties一般开始为null,会执行if语句的内容
+   			构建properties对象
+				构建backup对象，保存用?
+				loadResources
+					遍历defaultResources默认资源(已经在加载了"core-default.xml", "core-site.xml", "hdfs-default.xml", "hdfs-site.xml")
+					loadResource						//加载配置
+					loadResource						//加载resources中的配置
+				假如overlay不是null, 将overlay的配置项目放入properties中
+				然后做了什么？？？？？updatingResource意义何在？？？？？
+			?????待看
+	(3) get*,set*
+		以getBoolean为例说明:
+		getBoolean
+			getTrimmed(name)
+				get(name)
+					......
+			StringUtils.equalsIgnoreCase
+				equalsIgnoreCase
+			
+				
+	
+	
+	

@@ -1,0 +1,284 @@
+1. 关于资源分配 fair share
+STEADY_FAIR_SHARE
+The steady fair shares consider all queues, both active (with running applications) and inactive.
+FSQueue.setSteadyFairShare设置
+addNode,removeNode,updateNodeResource(节点重连或RM的admin方式调用)会设置跟队列的SteadyFairShare，设置为当前的clusterResource(刚刚更新的)，然后调用recomputeSteadyShares为队列从新分配资源。
+computeSteadyShares的时候，对任何资源都需要访问。这里返回的是实际分配的资源。
+
+
+INSTANTANEOUS_FAIR_SHARE
+The instantaneous fair shares consider only active queues (with running applications).
+FSQueue.setFairShare设置
+最终决定于FSQueue.setFairShare				FairSchedule.update
+仅仅在后台的更新线程UpdateThread进行操作，与前面相同。
+computeSteadyShares的时候，只有当该队列有程序在运行的时候(active状态)才计算share到其中。
+
+
+分配资源
+当调用addNode或removeNode或updateNodeResource(节点重连或RM的admin方式调用)的时候，会根队列的重新设置分配资源量(steadyFairShare)为重新计算的集群总量(clusterResource)，然后调用recomputeSteadyShares。
+
+FSParentQueue.recomputeSteadyShares
+	FairSharePolicy.computeSteadyShares			//计算子队列的资源,这里进计算了内存。即hadoop仅仅按内存分配资源。
+		ComputeFairShares.computeSteadyShares
+			ComputeFairShares.computeSharesInternal
+				handleFixedFairShares
+					遍历schedulables(即子队列)
+						getFairShareIfFixed						//得到fixedShare
+							该函数实际是计算当前节点(app或队列)是否需要固定的分配资源。如果返回值<0，表示该节点为有weight的，待分配。如果返回0，表示不用给该节点分配资源。如果返回值>0,表示为该节点分配固定的资源量。这里如果maxShare<=0,表示不给该节点分配资资源。如果是分配不是SteadyShare(即share)的时候，且当前的节点不是app而是队列，且当前队列是是非active(没有任何app)的时候，则不用给该队列分配share(这里要知道不是steady share)。如果以上都不满足，切权重为负数，则把当前队列的最小资源作为固定的资源分配该该节点。
+						如果得这里把最大资源量大于0，且队列权重也大于0
+							则将该队列加入如到nonFixedSchedulables中。
+						如果队列权重<=0
+							setResourceValue
+								然后设置队列的资源，设置为当前使用的量。
+						计算该队列当前总供使用的资源量(队列权重<=0)。并作为handleFixedFairShares参数返回takenResources(表示已消耗的资源)。
+				//截止handleFixedFairShares为止，分配给队列的资源是队列之前程序正在运行需要的资源。
+				一个循环将所有的子队列最大值累加，得到总资源的最大值(不超过Integer.MAX_VALUE，太极端，不考虑)
+				然后计算传入的最大资源量totalResource。
+				传入的最大资源量和计算的所有最大资源值取得最小值为该队列下所有子队列所使用的资源最大值totalResource。(这里说明，队列使用超过设置的最大值)
+				注: totalResource这里已经减去了takenResources(即不带权重的队列消耗的资源)
+				while(resourceUsedWithWeightToResourceRatio)			//这里第二个参数为schedulables，是由权重的队列
+					这个循环的含义是totalResource(已减去不带权重队列的最小量)的资源按照权限分配给各个带权限队列，直到总量刚好大于totalResource
+	遍历子队列
+		设置子队列的steady fair share到metrics
+		如果子队列是父队列节点，则继续调用recomputeSteadyShares完成递归
+
+注: 
+recomputeSteadyShares这个方法只有FSParentQueue存在，而不是覆盖的FSQueue的方法。而且，这里也意味着steady shares是真对于队列来说的。
+recomputeShares是FSQueue的方法，FSParentQueue和FSLeafQueue均覆盖了该方法。事实上调用FSParentQueue.recomputeShares的时候,为它的子队列分配了资源。调用FSLeafQueue.recomputeShares的时候,为该队列下面的app分配了资源。
+对比会发现shares的分配相比steadyShares，有更细的粒度。shares分配到app层次，steadyShare分配到叶子节点队列中。
+
+接下来对rootQueue.recomputeShares分析
+recomputeShares的过程与recomputeSteadyShares基本类似, 只是更细粒度的将资源分配到FSAppAttempt中。
+另外一处不同是，设置固定fair share的时候，对于为队列分配资源fair share的时候，尽管队列的weight<=0,如果队列的状态为非激活，但不给其设置固定的fair share。考虑到一般队列都会设置权重，且线上队列都设置了权重(由"weight"项目设置)，这里可以忽略固定分配的资源(当然也就以为这无论steady fair share和fair share的分配都可以不考虑固定方式分配资源了)。注: FSAppAttempt的权重跟Priority成正比(?????不是说Priority越小优先级越大吗?????)。
+
+综上:
+可以清除的知道STEADY_FAIR_SHARE和INSTANTANEOUS_FAIR_SHARE(即fair share)的区别
+前者是对集群的所有资源分配到各个队列上的结果。
+后者是对集群的所有资源分配到各个app上的结果，这里反应在叶子节点队列上。对队列下没有app的时候，不分配资源，所以为0。
+
+注:
+这个过程中，对于给队列分配资源的时候，分配到的资源量必须在最大资源量和最小资源量之间。(这里所说的资源量是由fair-scheduler.xml设置的)。
+对于给app分配资源的时候，分配到的资源量可以不再最大和最小资源量之前，而需要重点考虑的是提交app时候的申请资源量。(事实上这里的最大资源量和最小资源量分别为Resources.none和Resources.unbounded，分配的资源必然在这两者之间)。
+另外，这里分配的steady fair share还是fair share，无论分配给队列节点还是APP，都是调度器给其分配的资源，并不是程序真实的使用量。至于这个与app真实的关系需要进一步深入分析?????
+
+2. FairScheduler分析
+RM包含如下组件:scheduler,这里实际构造类是FairScheduler
+(a) FairScheduler构造函数
+	初始化服务，用时再分析
+	...
+	构造AllocationFileLoaderService对象allocsLoader
+	构造QueueManager对象queueMgr
+	...
+
+(b) FairScheduler.serviceInit
+FairScheduler.serviceInit
+	FairScheduler.initScheduler
+		构造FairSchedulerConfiguration对象
+		validateConf							//检查配置是否合理，主要检查Scheduler最大最小分配的内存和cpu核心数
+		设置minimumAllocation(默认1024M,1cpu)，maximumAllocation(默认8192M,4cpu)，incrAllocation(默认1024M,1cpu)
+		设置continuousSchedulingEnabled(默认为false)，continuousSchedulingSleepMs(默认5ms)
+		设置nodeLocalityThreshold和rackLocalityThreshold	(两者默认值都是-1，线上配置都为1)
+		设置nodeLocalityDelayMs和rackLocalityDelayMs(默认值都是-1)
+		设置preemptionEnabled(默认为false)，preemptionUtilizationThreshold(默认为0.8)
+		设置assignMultiple(默认false)，maxAssign(默认-1)
+		设置sizeBasedWeight(默认false，线上配置为false)
+		设置preemptionInterval(默认5000)
+		设置waitTimeBeforeKill(默认15000)
+		设置usePortForNodeName(默认为false)
+		设置updateInterval(默认500)，并检查保证其有效
+		rootMetrics=FSQueueMetrics.forQueue
+			获得MetricsSystem,这是一个单例的系统
+			从静态map的queueMetrics获取名字为root的QueueMetrics，如果没有就创建。这里的目的就是给root创建一个QueueMetrics，并注册到queueMetrics。
+		fsOpDurations				//获取一个单例的FSOpDurations对象，这个类的含义?????
+		初始化applications		
+		构造FairSchedulerEventLog对象并初始化
+		构造AllocationConfiguration对象，猜测是root队列的资源配置信息。
+		queueMgr.initialize			//初始化队列管理器
+			构造跟队列rootQueue，并添加到队列树queues
+			getLeafQueue					//创建一个默认的队列root.default
+		创建后台守护线程类updateThread
+		如果continuousSchedulingEnabled为true，创建守护线程schedulingThread
+		allocsLoader.init				
+		allocsLoader.setReloadListener
+		allocsLoader.reloadAllocations			// 加载配置相关，会根据队列配置文件是否更新队列配置
+	super.serviceInit					//会执行AbstractYarnScheduler.serviceInit
+		AbstractYarnScheduler.serviceInit
+			设置nmExpireInterval(默认值600000)
+			设置configuredMaximumAllocationWaitTime(默认值10000)
+			createReleaseCache
+				每nmExpireInterval执行一次定时器，具体是清空pending的ContainerId。		(假如为AM分配Container，而Container没有给调度响应的动作从pending的Container把Container移除，这里就移除Container，会不会误操作?????待分析?????)
+
+(c) FairScheduler.serviceStart
+FairScheduler.serviceStart
+	startSchedulerThreads
+		启动updateThread线程
+		如果continuousSchedulingEnabled为true，启动schedulingThread线程
+		启动allocsLoader线程
+
+(d) 主要后台程序的分析
+(d.1) updateThread后台现成
+UpdateThread.run
+	每updateInterval时间执行一次循环，循环内容如下:
+		update
+			updateStarvationStats
+				首先更新lastPreemptionUpdateTime
+				遍历队列管理器queueMgr下所有的叶子节点，并执行其updateStarvationStats方法
+					FSLeafQueue.updateStarvationStats
+						isStarvedForMinShare				//返回false就设置lastTimeAtMinShare		
+							判断MinShare是否饥饿。返回true的条件是:当前使用资源量(当前所有AppAttempt的消耗) < min(MinShare最小资源设置,demands即各个AppAttempt需求量的总和)。说明，当前的资源量没满足要求，处于饥饿状态。
+						isStarvedForFairShare				//返回false就设置lastTimeAtFairShareThreshold
+							判断fairShare是否饥饿。返回true的条件是:当前使用资源量(当前所有AppAttempt的消耗) < min(fairShare资源 * 队列的fairSharePreemptionThreshold(默认0.5),demands即各个AppAttempt需求量的总和)
+			rootQueue.updateDemand			//从跟队列开始递归更新demands,队列的demand是当前的使用量和所有请求的资源之和。
+				跟新各个队列的app，对于叶子队列的demand为其所有的app(包括运行的和不运行的)的资源需求之和。父队列的demand为所以子队列之和。
+				一个app的demand为其AM的container和其管理的所有container的资源量之和。
+			rootQueue.setFairShare			//设置跟队列的资源量为集群总资源量clusterResource
+			rootQueue.recomputeShares		//递归计算树状队列所有节点的fairShare,前面已经详细说明了
+				注:这里使用的调度策略是defaultQueueSchedulingPolicy指定的值，线上默认都是fair，hadoop默认也是fair
+			updateRootQueueMetrics			//保存参数
+			最后将操作的执行周期添加到fsOpDurations.updateCall
+		preemptTasksIfNecessary
+			shouldAttemptPreemption			//假如根节点分配的内存占总资源内存的比例(或cpu占比)得到抢占的阈值，且开了抢占功能，就返回正确。
+			判断是否可以抢占，必须比上次抢占晚preemptionInterval			
+			遍历每一个叶子队列，执行resToPreempt返回资源值，然后累加
+				resToPreempt
+					获取minShareTimeout					//由"minSharePreemptionTimeout"设置，默认Long.MAX_VALUE
+					获取fairShareTimeout				//由"fairSharePreemptionTimeout"设置，默认Long.MAX_VALUE
+					判断如果距离上一次不饥饿的事件如果超过了minShareTimeout，就执行下面的过程。				//所以开启抢占，必然要设置minSharePreemptionTimeout
+						计算min(最小资源要求或当前资源需求)-当前叶子队列的使用资源量，返给给resDueToMinShare。如果该值小于0，就设置为0。
+					同样道理计算resDueToFairShare
+					返回max(resDueToMinShare,resDueToFairShare)作为要抢占的资源
+			如果之前累加的总抢占资源量大于0，则执行preemptResources抢占
+				preemptResources
+					遍历warnedContainers列表					//warnedContainers表示已经被警告的Container,一旦必要就会删除
+						假如Container状态为RUNNING或ALLOCATED，会调用warnOrKillContainer
+						warnOrKillContainer						// ?????这里再详细看，关系到怎么删除container，是等待还是直接删除。
+							查询抢占事件，第一次肯定是null,所以调用addPreemption设置Container对应的app的preemptionMap(它用于记录下次抢占的事件)，并设置这个app要抢占的资源量。当第二次选中该Container进行抢占的时候, 会计算是否到杀死Container的事件，是第一次要抢占的事件+waitTimeBeforeKill(yarn.scheduler.fair.waitTimeBeforeKill设置,默认值是15000)。如果时间到了，会调用completedContainer杀死Container。
+							进行一些列检查后，会调用completedContainer完成Container。实际是通过KILL事件完成。
+						然后把这个删除的Contaienr资源量从要抢占的资源量toPreempt中减去
+					遍历所有叶子队列，依次执行resetPreemptedResources
+						resetPreemptedResources
+							对该队列下的所有app重新计算preemptedResources，即将要抢占的资源量preemptedResources
+					进入循环，退出条件是toPreempt被置为0
+							getRootQueue().preemptedResources
+								这个是按照深度的一个递归调用，选出最该被调用的Container。这里从根节点递归到叶子节点，再到app，再到container。
+								具体的选择规则是FairScharePolicy.compare决定，规则或者说原则如下:
+									(i) 如果A的使用资源量大于其最小的资源量，而B的使用资源量小于其最小的资源量。则A更应该被抢占。
+									(ii) 如果上述条件无法满足，计算比值。。。(这里懒得写了，具体看源码)
+							warnOrKillContainer			//同前
+							将得到的Container放到warnedContainers，并减去要抢占的资源量。
+					最后，待抢占资源完成，清空所有队列下app的要抢占资源preemptedResources
+					最后将这一流程的事件保存到fsOpDurations
+		这里将一个循环的周期添加到fsOpDurations.updateThreadRun
+						
+(d.2) schedulingThread
+该线程只有在continuousSchedulingEnabled为true的时候生效。
+这个线程持续不断地调度资源，并且异步地响应节点的心跳(来自于2.7.2的注释)。
+主要的函数是attemptScheduling，用于分配Container。在nodeUpdate也调用，这也是为什么该线程并不是必要的，可以不开启，可以等到每次心跳事件调用nodeUpdate再分配Container，而且线上也并没有开了该线程。
+ContinuousSchedulingThread.run
+	循环执行continuousSchedulingAttempt，每次执行后休眠continuousSchedulingSleepMs秒
+		continuousSchedulingAttempt		
+			首先对集群所有节点进行排序。实际上调用DefaultResourceCalculator排序，按照当前节点使用的内存量来排序，按使用量的升序排序。
+			对排序后的节点列表进行遍历
+				如果节点可使用的资源都大于minimumAllocation
+					attemptScheduling
+						如果开启了"工作保存恢复功能"并且没有达到到达"启动恢复工作的等待时间"(默认10000)后，不进行调度。
+						假如节点保留的app在该节点上有Container请求，且保证分配Conainer后自己及父队列仍然队列限制。执行assignReservedContainer。
+							node.getReservedAppSchedulable().assignReservedContainer								
+								如果可用资源能够满足保留的资源，可以分配Container
+						否则释放请求该节点的reservedAppSchedulable, 通知该节点无法实现预留Container的分配。具体释放预留的Container的条件如下两条
+							(条件1)当前节点的预留APP项目在该节点上没有Contianer的申请
+							(条件2)APP预留资源与当前app之和超过了max-share的限制。			(这里会不会导致无法添加程序?????!!!!!)
+						假如reservedAppSchedulable为空，即没有保留的app。
+							递归执行assignContainer分配一个Contianer。在(d.2.1)具体分析
+								
+(d.2.1)	递归执行跟队列的assignContainer
+这个函数的主要意义就是在某一个DataNode上给某个APP分配Contaier。注意是指定的某个DataNode。				
+递归执行assignContainer会调用三个assignContainer，分别是FSParentQueue，FSLeafQueue，FSAppAttempt的assignContainer。是对树进行遍历，显然最后执行分配Container的操作是FSAppAttempt.assignContainer。如果分配到资源会立即返回。
+下面依次分析:
+FSParentQueue.assignContainer
+	assignContainerPreCheck
+		检查这个队列是否可以分配资源。如果使用的资源大于最大资源量，并且这个父节点存在保留的Container，就不能分配。
+	使用FairShareComparator排序当前节点的所有子队列。按照由最多分配资源的原则进行降序排序(具体见规则)。
+	遍历所有的子节点，继续调用assignContainer
+
+FSLeafQueue.assignContainer
+	assignContainerPreCheck
+	排列该叶子队列下属的所有runnableApps
+	遍历重新排列后的runnableApps
+		如果当前遍历的app是在黑名单中，则退出分配过程。
+		调用FSAppAttempt.assignContainer
+
+FSAppAttempt.assignContainer(node)
+	FSAppAttempt.assignContainer(node,false)
+		获取节点的Priority列表prioritiesToTry					//这里的Priority是已经提交到调度器的请求的优先级，一个请求可能对应多个Contianer，也可以提交多个请求
+		遍历prioritiesToTry
+			计算当前优先级所有ANY的资源请求的Container数量
+			hasContainerForNode
+				这个函数主要判断给点的节点node上是否可以满足container请求。
+				根据请求的Contaier位置与Contaier数目判断，并且要求所请求的资源量必须小于等于节点node的总资源量。
+			判断如果没有请求为ANY的Container或该节点无法满足Container请求的话，就退出循环。否则继续。
+			addSchedulingOpportunity				//增加对应优先级下的引用计数，schedulingOpportunities
+			检查AM资源利用...
+			根据优先级，获取该节点对应的racklocal请求和local请求
+			一些检查工作...
+			getAllowedLocalityLevel			//得到返回的allowedLocatity
+				...			//?????关系到调度的，用于分析
+			如果rack和local请求不为空，就使用NODE_LOCAL的方式分配COntianer
+				assignContainer(node, localRequest,NodeType.NODE_LOCAL, reserved)
+					获取请求需要的capability，创建Container或选取之前的保留Contianer
+					如果节点的可用资源满足请求的capability
+						allocate
+						node.allocateContainer				//这个函数如何使RM通知NM要分配contianer?????应该是通过心跳，有待查找。
+							deductAvailableResource			//更新这个调度节点的已用资源和已用资源
+							将该Container加入到launchedContainers中
+						如果是用于AM的Container还有进行一些设置
+					如果不满足要求
+						如果capability操作队列的最大share，就直接返回资源为NONE
+						reserve
+							第一次reserved，保存用户以资源到metric中。否则，从node中获取reserved的Container
+							super.reserve
+								创建RMContainerImpl
+								resetReReservation		//将priority放入reReservations中
+								给rmContainer处理RMContainerReservedEvent事件,处理事件会设置RMContainer的reserved相关字段，并置状态为Reserved
+								将这个RMContianerImpl加入到reservedContainers中
+							node.reserveResource		//主要预留的Contianer记录到node中
+								一个node最多reserve一个app的Contianer，如果这个Container的app与之前预留的Conainer的app不一致，则抛出异常。
+								setReservedContainer		//设置reservedContainer，难道一个SchedulerNode只能预留一个Container?????
+								置reservedAppSchedulable
+			如果rack和local请求不为空，allowedLocatity为RACK_LOCAL或OFF_SWITCH，则使用RACK_LOCAL方式分配Container
+				assignContainer(node, rackLocalRequest,NodeType.RACK_LOCAL, reserved)
+					仅传入参数不同...
+
+													
+注:
+配置项目列表
+含义																													配置项
+minimumAllocation										yarn.scheduler.minimum-allocation-mb, yarn.scheduler.minimum-allocation-vcores
+maximumAllocation										yarn.scheduler.maximum-allocation-mb, yarn.scheduler.maximum-allocation-vcores
+incrAllocation											yarn.scheduler.increment-allocation-mb, yarn.scheduler.increment-allocation-mb
+continuousSchedulingEnabled					yarn.scheduler.fair.continuous-scheduling-enabled
+continuousSchedulingSleepMs					yarn.scheduler.fair.continuous-scheduling-sleep-ms
+nodeLocalityThreshold								yarn.scheduler.fair.locality.threshold.node
+rackLocalityThreshold								yarn.scheduler.fair.locality.threshold.rack
+nodeLocalityDelayMs									yarn.scheduler.fair.locality-delay-node-ms
+rackLocalityDelayMs									yarn.scheduler.fair.locality-delay-rack-ms
+preemptionEnabled										yarn.scheduler.fair.preemption
+preemptionUtilizationThreshold			yarn.scheduler.fair.preemption.cluster-utilization-threshold
+assignMultiple											yarn.scheduler.fair.assignmultiple
+maxAssign														yarn.scheduler.fair.max.assign
+sizeBasedWeight											yarn.scheduler.fair.sizebasedweight
+preemptionInterval									yarn.scheduler.fair.preemptionInterval
+waitTimeBeforeKill									yarn.scheduler.fair.waitTimeBeforeKill
+usePortForNodeName									yarn.scheduler.include-port-in-node-name
+updateInterval											yarn.scheduler.fair.update-interval-ms
+nmExpireInterval										yarn.nm.liveness-monitor.expiry-interval-ms
+configuredMaximumAllocationWaitTime	yarn.resourcemanager.work-preserving-recovery.scheduling-wait-ms
+"工作保存恢复功能"										yarn.resourcemanager.work-preserving-recovery.enabled
+"启动恢复工作的等待时间"							yarn.resourcemanager.work-preserving-recovery.scheduling-wait-ms
+"每次心跳(或ContinuousSchedulingThread的每个循环)开启一次分配多个Container"				yarn.scheduler.fair.assignmultiple
+"每次心跳(或ContinuousSchedulingThread的每个循环)分配Container的最大数目"					yarn.scheduler.fair.max.assign
+
+
+
+
+

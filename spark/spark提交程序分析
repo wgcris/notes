@@ -1,0 +1,49 @@
+/software/servers/spark-1.6.1-bin-2.7.1/bin/spark-submit --class org.apache.spark.examples.SparkPi --jars /software/servers/spark-1.6.1-bin-2.7.1/lib/spark-examples-1.6.1-hadoop2.7.1.jar --master yarn-cluster --executor-memory 20G --num-executors 3 hdfs://ns1/test/in 1000
+
+spark-submit定义如下:
+exec "$SPARK_HOME"/bin/spark-class org.apache.spark.deploy.SparkSubmit "$@"
+
+
+/bin/spark-class org.apache.spark.deploy.SparkSubmit --class org.apache.spark.examples.SparkPi --jars lib/spark-examples-1.6.1-hadoop2.7.1.jar --master yarn-cluster --executor-memory 20G --num-executors 3 hdfs://ns1/test/in 1000
+
+SparkSubmit.main
+	SparkSubmit.submit
+		prepareSubmitEnvironment		//这里是准备环境变量的过程
+			...	
+			这里设置了childMainClass为org.apache.spark.deploy.yarn.Client，猜测后面会调用该类
+			...
+
+Client.main
+	...
+		Client.run
+			Client.submitApplication
+				createContainerLaunchContext
+					setupLaunchEnv			//这里会设置env
+						"spark.yarn.appMasterEnv.*" 可以传递给AM程序
+				...
+					设置command的时候，可以知道对于yarn，会启动org.apache.spark.deploy.yarn.ApplicationMaster类
+
+
+
+ApplicationMaster.main
+	...
+		ExecutorRunnable.prepareEnvironment设置了AM分配的Container的env
+			...
+			runAllocatedContainers
+				ExecutorRunnable.run
+					startContainer
+						prepareEnvironment
+							两种方式传入: 
+								(1) 通过spark.executorEnv.*指定
+								(2) 通过系统的环境变量SPARK_YARN_USER_ENV执行
+						ctx.setEnvironment(env)
+			...
+	...
+
+				
+				
+/software/servers/spark-1.6.1-bin-2.7.1/bin/spark-submit --class org.apache.spark.examples.SparkPi --jars /software/servers/spark-1.6.1-bin-2.7.1/lib/spark-examples-1.6.1-hadoop2.7.1.jar --conf "spark.yarn.appMasterEnv.yarn.nodemanager.docker-container-executor.image-name=172.22.96.66:5000/centos_hadoop_spark:0.04" --conf "yarn.nodemanager.container-executor.class=org.apache.hadoop.yarn.server.nodemanager.DockerContainerExecutor"  --master yarn-cluster --executor-memory 20G --num-executors 3 hdfs://ns1/test/in 1000
+
+			
+		
+

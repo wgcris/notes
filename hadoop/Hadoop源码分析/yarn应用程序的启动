@@ -1,0 +1,836 @@
+(1) 客户端程序
+客户端程序的流程:
+	YarnClient.createYarnClient						// 构造YarnClientImpl对象client
+	YarnClient.init												// 服务类会调用serviceInit
+		初始化参数
+		判断是否开启了timeline server,开启就构造一个相应的客户端服务程序histroyClient
+	YarnClient.start
+		构造rmClient，作为与RM访问的代理
+		开启histroyClient对应的服务
+	YarnClient.getYarnClusterMetrics
+	YarnClient.getNodeReports
+	YarnClient.getQueueInfo
+	YarnClient.getQueueAclsInfo						//获取集群参数，节点报告，队列信息，ACLs等通过rmClient代理调用
+	YarnClient.createApplication					//构造一个客户端控制应用的对象app
+		构造一个提交app的上下文context
+		getNewApplication
+			rmClient.getNewApplication				//调用ResourceManager.clientRM对应函数并返回，具体RM的工作见附录D
+		获取申请的app的id，并用其构造一个客户端控制app的对象YarnClientApplication
+	app.getNewApplicationResponse					//显示返回的应用信息，分配的app的id和最大能力
+	app.getApplicationSubmissionContext		//获取一个提交应用的上下文appContext(已经在createApplication构造了应用实例)
+	...
+		设置提交应用上下文的环境变量，资源，启动命令，请求资源量，队列，优先级等工作
+	...
+	client.submitApplication
+		构造一个提交的请求，并设置appContext为提交app应用请求的上下文
+		rmClient.submitApplication					//调用ResourceManager.clientRM对应方法并返回,详细见附录E
+		然后是一些检查提交状态的工作
+		
+	monitorApplication										//monitorApplication为自定义函数，用来监视RM返回的报告
+
+(A) YarnClientImpl说明
+YarnClientImpl是一个为客户端提交应用程序到Yarn上的一个类，他也是一个服务类(继承关系YarnClientImpl=>YarnClient=>AbstractService)
+其中，YarnClientImpl.rmClient的类型为ApplicationClientProtocol(为客户端与RM的通信协议)，实际上是构造的客户端访问RM的代理。
+
+(B) YarnClient.init初始化参数
+		yarn.client.application-client-protocol.poll-interval-ms
+		yarn.client.application-client-protocol.poll-timeout-ms
+		yarn.client.app-submission.poll-interval
+		yarn.timeline-service.client.best-effort
+
+(C) ClientRMService
+ResourceManager有组件ClientRMService对象clientRM,是RM用于处理客户端发来的服务。
+
+(D) ClientRMService::getNewApplication
+ClientRMService.getNewApplication
+	构造一个response对象
+	使用getNewApplicationId构造一个新的ApplicationId对象，并设置给response对象
+	使用scheduler.getMaximumResourceCapability方法获得集群的最大能力，并设置给response对象
+	返回response对象。
+由此可见，ClientRMService.getNewApplication返回给客户端一个可用的app的id和最大能力。
+
+(E) ClientRMService::submitApplication
+ClientRMService::submitApplication
+	获取用于user,这里是RM端的ClientRMService获取用于，应该是启动yarn的用户。
+	检查是否ResourceManager.rmContext.activeServiceContext.applications中是否已经注册了应用。已经注册就直接返回。
+	然后检查提交的上下文的队列名称，应用名称，应用类型是都已经设置，没有设置就设置为默认值。
+	rmAppManager.submitApplication
+		获取应用的ID，即applicationId
+		createAndPopulateNewRMApp							//创造一个新的应用对象(即RMAppImpl对象)
+		...																		//这里咱是不考虑安全认证问题，所以省略
+		this.rmContext.getDispatcher().getEventHandler().handle							//实际是调用ResouceManager.rmDispatcher处理事件
+			这里处理了RMAppEventType.START事件，最终会调用ApplicationEventDispatcher::handler处理事件。内部会找到这个APP应用实例(RMAppImpl对象)，然后调用其handle函数继续处理。然后发现在RMAppImpl内部是它的有限状态机处理的，传入的时间是RMAppEventType.START事件。由于RMAppImpl开始的状态是NEW,经过RMAppEventType.START事件，通过RMAppNewlySavingTransition.transition函数(是保存状态的过程,详细见附录G)，会变为NEW_SAVING状态。(注:RMAppNewlySavingTransition.transition函数的操作是)
+
+
+	构造一个response对象，并返回。						//发现构造的respponce对象都没有传入参数，那么怎样区别不同的response?????
+	
+	
+(F)ResouceManager的重要组件
+ResouceManager.rmContext是一个RMContextImpl类型的对象，是RM的上下文信息。
+RMContextImpl.activeServiceContext，是一个RMActiveServiceContext类的对象，是一些激活服务的上下文。
+RMActiveServiceContext.applications，用于维护一组应用，是一个map，key为ApplicationId，value为RMApp(表示应用)
+RMContextImpl.rmAppManager，实质就是ResouceManager.rmAppManager。是一个RMAppManager对象，用于维护一组应用。
+Resource.masterService是RM中处理AM发来请求的服务。
+
+(F.1) 资源调度器的schedulingThread服务 ———— 处理RMContainer的部分
+其实这个过程(attemptScheduling)不仅在该后台进程中，同时在心跳更新节点中调用，事实线上就是在后者调用的。
+FairScheduler在初始化的时候有组件schedulingThread，ContinuousSchedulingThread类型，是一个线程类，作为后台线程启动。
+ContinuousSchedulingThread.run
+	continuousSchedulingAttempt
+		从nodes中构造出一组NodeId的列表nodeIdList
+		然后将nodeIdList排序，即讲nodeIdList按照大小的顺序排序。
+		遍历nodeIdList，一依次执行下面的步骤
+			根据NodeId获取FSSchedulerNode对象						//实际就是nodes的value值，已经在NM向RM注册的时候设置
+			如果配置的最小资源不大于节点有可利用的资源
+				attemptScheduling
+					...			//暂时不考虑保留的app
+					queueMgr.getRootQueue().assignContainer(node).equals(Resources.none())		
+						//利用队列管理分配Container，如果节点之前没有使用，就设置统计数据。这里需要重点分析assignContainer。
+						FSParentQueue::assignContainer
+							检查资源是否满足要求。即子队列的资源是否超过最大要求。
+							然后按照FairSharePolicy(按照实际的资源与最小要求的比例排列)的方式重新排列当前节点下的所有childQueues。
+							然后遍历下面的所有childQueues，继续"递归"。(递归树，有的会调入到叶子节点，调用FSLeafQueue::assignContainer)
+							当有一个叶子节点的资源返回为非NONE(非叶子节点必然会返回NONE)且所在队列符合容量限制要求的时候，就可以返回了，完成了分配contaner工作。
+							注:	FSLeafQueue::assignContainer说明					//可以清晰的看到队列-->app的层次分配
+								检查资源是否超过设置
+								将叶子节点下面的app进行排序									//只有当存在app(即runnableApps不为空)的时候才进行分配
+								然后遍历节点，调用assignContainer，返回资源assigned，不为空就返回。
+								FSAppAttempt::assignContainer							//只有当前app有在当前节点可分配的Container才进行分配
+									FSAppAttempt::assignContainer(两个参数)
+										...				//经过一些列处理请求的工作
+										FSAppAttempt::assignContainer(四个参数)
+											获取请求的capability
+											获取节点可用的capability
+											FSAppAttempt::createContainer，构造一个Container
+												分配一个ContainerId
+												分配并设置一个Container
+											如果节点能满足申请的资源的要求
+												FSAppAttempt::allocate							//构造AMContainer对象
+													...									//一些检查工作
+													构造RMContainer对象rmContainer			//初始状态为NEW
+														设置参数，读写锁
+														rmContext.getRMApplicationHistoryWriter().containerStarted						//?????暂时不考虑
+														rmContext.getSystemMetricsPublisher().containerCreated								//?????暂时不考虑
+													将rmContainer加入到newlyAllocatedContainers和liveContainers
+													构造resourceRequestList，里面是这里请求的资源
+													将消耗的资源假如到currentConsumption中
+													处理RMContainerEventType.START事件
+														RMContainerState.NEW==(RMContainerEventType.START,ContainerStartedTransition)==>RMContainerState.ALLOCATED 
+													返回RMContainer对象
+												SchedulerNode::allocateContainer
+													把RMContainer对象加入到SchedulerNode::launchedContainers中
+											如果节点不满足要求，就执行保留工作(暂不分析)。
+
+综上所述: 
+	资源调度器会维护一个后台进程，会不断地循环的遍历队列的列表(外层还有node的遍历，主要是不断地分配node的资源给队列)，然后分配资源。
+	队列是一个树结构，会递归访问，能够分配资源的只有叶子节点，如果叶子节点可以分配资源满足要求，就分配资源，更新各种容器的列表。并触发RMContainerEventType.START事件。
+
+(F.2) 资源调度器的重要组件
+ 1) nodes		
+		在AbstractYarnScheduler（FairScheduler的父类）定义，它是一个map类型，key为NodeId,value为SchedulerNode(这个类是从调度器的角度的集群节点的抽象)，表示从调度器角度理解的所有集群节点的集合。FairScheduler::addNode会增加节点，猜测是集群的节点向RM注册的时候触发FairSchedulerFairScheduler::addNode会设置该节点。
+
+
+
+(F.3) 资源调度器分配Container后，调用的事件RMContainerEventType.START
+RMContainerState.NEW==(RMContainerEventType.START,ContainerStartedTransition)==>RMContainerState.ALLOCATED
+	使用rmDispatcher处理RMAppAttemptEventType.CONTAINER_ALLOCATED事件，交给ApplicationAttemptEventDispatcher处理
+		ApplicationAttemptEventDispatcher::handle
+			交给RMAppAttempt处理事件
+				RMAppAttemptImpl::handle		
+					这里触发一个状态机，(有多处转换规则，这里只关注一处)
+						RMAppAttemptState.SCHEDULED==(RMAppAttemptEventType.CONTAINER_ALLOCATED,AMContainerAllocatedTransition) ==> RMAppAttemptState.ALLOCATED_SAVING(处理正确),RMAppAttemptState.SCHEDULED(处理错误)。
+					(这里交给主流程后续分析)
+
+(G)应用状态的保存
+对于提交一个RMAppImpl的时候，会涉及到状态的保存，会触发到如下RMAppNewlySavingTransition.transition以实现应用的状态的保存
+RMAppNewlySavingTransition.transition
+	app.rmContext.getStateStore().storeNewApplication(app)					//app为当前RMAppImpl实例本身(详见状态机说明)
+		rmContext.activeServiceContext.stateStore.storeNewApplication
+			构造了应用状态的数据的对象，传入了提交时间，开始时间，提交应用的上下文，用户等参数。
+			发送RMStateStoreAppEvent	事件给RMState的状态机处理。假设一致都是ACTIVE，不考虑FENCED。这个状态机相当于从ACTIVE状态通过RMStateStoreEventType.STORE_APP事件经StoreAppTransition处理变为ACTIVE状态。
+				StoreAppTransition.transition						//过程中如果发生异常会进入FENCED状态
+					store.storeApplicationStateInternal
+							该函数是用于执行具体存储的操作，根据选择的存储类型不同由不同的存储方式，因此需要子类覆盖。这里分析ZKRMStateStore的实现。
+							ZKRMStateStore.storeApplicationStateInternal
+								在设定的zk的根节点下创将一个以appid为名字的节点，然后写入数据。
+					store.notifyApplication
+						再次触发RM的事件处理器rmDispatcher，由于发送的事件类型为RMAppEventType,所以使用ApplicationEventDispatcher处理。
+						ApplicationEventDispatcher.handle
+							rmApp.handle
+								再次调用给有限状态机发送时间。RMAppEventType.APP_NEW_SAVED会使RMAppImpl从状态NEW_SAVING转化为SUBMITTED，通过AddApplicationToSchedulerTransition处理。(注: APP_NEW_SAVED这是RM重启引入的状态，Yarn那本书没有)
+									AddApplicationToSchedulerTransition.handle				//处理AppAddedSchedulerEvent时间
+										会向RM	的rmDispatcher发送SchedulerEventType类型的事件，由schedulerDispatcher处理(一个服务，用于资源调度)。							
+										SchedulerEventDispatcher.handle
+											将	SchedulerEventType.APP_ADDED放入队列，在run函数中待处理，最后会调用scheduler.handle(使用fair调度器)									
+												FairScheduler::handle												//进入APP_ADDED分支
+													解析队列名字，这里没有设置，默认应该为default
+														FairScheduler::addApplication						//这里仅仅判断该应用是否由权限提交。尚未考虑资源问题。
+															首先检查提交队列名称是否正常
+															assignToQueue					//将应用加入队列中，对分析队列算法应该很有用，暂时不分析?????
+															检查权限
+															将RMAppImpl加入到已经调度的app列表applications中
+															queue.getMetrics().submitApp			//提交app，对分析队列算法应该很有用，暂时不分析?????
+															向rmDispatcher发送RMAppEventType.APP_ACCEPTED事件									
+
+rmDispatcher处理RMAppEventType.APP_ACCEPTED			
+	交给ApplicationEventDispatcher::handle处理RMAppEventType.APP_ACCEPTED
+		交给RMAppImpl.handle处理事件
+			RMAppState.SUBMITTED状态==(RMAppEventType.APP_ACCEPTED事件，StartAppAttemptTransition)==>RMAppState.ACCEPTED
+				StartAppAttemptTransition::transition
+					RMApplImpl::createAndStartNewAttempt
+						createNewAttempt
+							分配一个应用实例(RMAppAttemptImpl)的id。
+							根据id分配一个RMAppAttemptImpl
+							最后将RMAppAttemptImpl放入RMAppAttemptImpl.attempts这个map中，置currentAttempt。
+						向rmDispatcher发送RMAppAttemptEventType.START事件
+
+rmDispatcher处理RMAppAttemptEventType.START
+	交给ApplicationAttemptEventDispatcher::handle处理RMAppAttemptEventType.START
+		获得这个事件对应的RMAppAttemptImpl对象，然后调用其handle方法。
+			RMAppAttemptImpl::handle							//注: RMAppAttemptImpl为New状态
+				RMAppAttemptState.NEW状态==(RMAppAttemptEventType.START事件，AttemptStartedTransition)==>RMAppAttemptState.SUBMITTED状态
+					AttemptStartedTransition::transition
+						获取当前的RMAppAttemptImpl对象，设置startTime
+						将当前RMAppAttemptImpl的id注册到AMS服务中，即Resource.masterService。
+						向rmDispatcher发送SchedulerEventType.APP_ATTEMPT_ADDED事件
+						
+注: 对于SchedulerEventType，不是由RM的异步存储器的handler处理，而是交给下一层的schedulerDispatcher处理(会最后调用FairScheduler::handle)。
+rmDispatcher处理SchedulerEventType.APP_ATTEMPT_ADDED
+	交给schedulerDispatcher::handle处理SchedulerEventType.APP_ATTEMPT_ADDED事件
+		SchedulerEventDispatcher::handle
+			将SchedulerEventType.APP_ATTEMPT_ADDED放入事件队列，等待run轮询处理事件。
+				scheduler::handle
+					FairScheduler::handle		//然后这里仅进入APP_ATTEMPT_ADDED分支
+						addApplicationAttempt													//这里主要是判断队列的app数目和用户的app数目是否已经达到最大值。
+							创建一个FSAppAttempt(从fair调度器件角度看的一个AppAttempt)对象
+							将其加入到一个SchedulerApplication(从调度器件角度看的一个Application)							
+							canAppBeRunnable		//验证用户和队列是否操作最大app数目
+							queue.addApp				//向队列中加入FSAppAttempt对象，并更新usersNumRunnableApps或usersNonRunnableApps
+																	//这里会加入到runnableApps中，等待fair调度器的后台进程调度。满足条件就会触发创建一个Container
+							queue.getMetrics().submitAppAttempt					//QueueMetrics::submitAppAttempt
+								appsPending++
+								获取用户的QueueMetrics
+								????? 没看懂 ????? 为啥递归
+							向rmDispatcher发送RMAppAttemptEventType.ATTEMPT_ADDED事件
+								
+rmDispatcher发送RMAppAttemptEventType.ATTEMPT_ADDED
+	交给ApplicationAttemptEventDispatcher::handle处理RMAppAttemptEventType.ATTEMPT_ADDED事件
+		ApplicationAttemptEventDispatcher::handle
+			交给事件对应的rmAppAttempt::handle处理						
+				rmAppAttempt::handle
+					RMAppAttemptState.SUBMIT状态==(RMAppAttemptEventType.ATTEMPT_ADDED事件，ScheduleTransition)==> RMAppAttemptState.LAUNCHED_UNMANAGED_SAVING,RMAppAttemptState.SCHEDULED //根据调度情况返回不同状态
+						ScheduleTransition::transition
+							1) subCtx.getUnmanagedAM返回false							//getUnmanagedAM分析?????
+								根据请求的上下文设置appAttempt.amReq，为AM申请。
+									appAttempt.scheduler.allocate
+										FairScheduler::allocate					//这个allocate执行了吗???觉得应该是在后面的调用生效?????待重新看
+											得到对应的FSAppAttempt
+											normalizeRequests，猜测是使请求的参数正常化。
+											设置AM的资源能力
+											releaseContainers											//这时候应该没有释放的，暂时不考虑
+											updateResourceRequests								//这些资源请求的信息记录于FSAppAttempt中
+												appSchedulingInfo.updateResourceRequests							
+													构造请求到requests中，	类型为Map<Priority, Map<String, ResourceRequest>>。第一层的key为优先级，第二层的key为资源名称(?????),第二层的value为资源请求。
+											设置抢占的的容器id,一起放到FSAppAttempt.preemptionMap中				//启动am，咱是不考虑
+											更新黑名单														//设置为null，启动am时候暂时不考虑
+											pullNewlyAllocatedContainersAndNMTokens											
+												token相关操作
+											设置	FSAppAttempt的headroom						//资源相关
+											返回Allocation对象														
+												调用rmContainer.handle处理RMContainerEventType.ACQUIRED
+							2) subCtx.getUnmanagedAM返回true								//这个是AM直接从客户端启动的流程，这里暂时不考虑
+								...			//客户端直接启用的am，RM需要保存他的状态
+
+
+资源调度器的后台服务schedulingThread触发的状态			!!!!!后台进程触发的状态转换。
+	RMAppAttemptState.SCHEDULED==(RMAppAttemptEventType.CONTAINER_ALLOCATED,AMContainerAllocatedTransition) ==> RMAppAttemptState.ALLOCATED_SAVING,RMAppAttemptState.SCHEDULED
+		AMContainerAllocatedTransition.transition	
+			设置appAttemp.amReq
+			appAttempt.scheduler.allocate
+				FairScheduler::allocate
+					获得FSAppAttempt对象
+					使请求正常化
+					设置AM的资源
+					releaseContainers释放不需要的container
+					updateResourceRequests			//?????暂时不分析
+					处理紧急的Container
+					更新黑名单
+					pullNewlyAllocatedContainersAndNMTokens
+						处理token
+						RMContainerImpl.handle处理RMContainerEventType.ACQUIRED事件
+							状态机处理RMContainerEventType.ACQUIRED事件				
+										
+						pullNewlyAllocatedContainersAndNMTokens
+					...			
+				设置appAttempt的masterContainer，提交上下文。
+				storeAttempt					//存储状态
+					storeNewApplicationAttempt
+						构造一个ApplicationAttemptStateData对象attemptState，待会作为参数传入
+						向RMStateStore的dispatcher发送RMStateStoreEventType.STORE_APP_ATTEMPT事件
+
+处理RMContainerEventType.ACQUIRED
+	RMContainerState.ALLOCATED==(RMContainerEventType.ACQUIRED,AcquiredTransition)==>RMContainerState.ACQUIRED
+		清空Container的资源请求
+		将这个Container放到containerAllocationExpirer中，猜测是为了监控Container的Expirer
+		调用rmDispatcher处理RMAppEventType.APP_RUNNING_ON_NODE事件
+
+rmDispatcher处理RMAppEventType.APP_RUNNING_ON_NODE事件
+	ApplicationEventDispatcher.handle
+		RMAppImpl.handle
+			RMAppState.ACCEPTED==(RMAppEventType.APP_RUNNING_ON_NODE,AppRunningOnNodeTransition)==>RMAppState.ACCEPTED
+        AppRunningOnNodeTransition::handle
+					将节点的id加入到app.ranNodes中。				//ranNodes好像只是记录的节点用于清理工作?????
+				这个流程断了...
+					
+RMStateStore处理RMStateStoreEventType.STORE_APP_ATTEMPT事件
+向RMStateStore的dispatcher发送RMStateStoreEventType.STORE_APP_ATTEMPT事件
+	交给ForwardingEventHandler处理
+		ForwardingEventHandler.handle
+			handleStoreEvent			//具体为状态机的处理，本文假设RMStateStoreState始终为ACTIVE
+				RMStateStoreState.ACTIVE==(RMStateStoreEventType.STORE_APP_ATTEMPT, StoreAppAttemptTransition)==>RMStateStoreState.ACTIVE	
+					StoreAppAttemptTransition.transition
+						storeApplicationAttemptStateInternal				//ZKRMStateStore
+							猜测是创建appattempt对应的ZNode节点
+						notifyApplicationAttempt										//RMStateStore
+							交给rmDispatcher处理RMAppAttemptEventType.ATTEMPT_NEW_SAVED事件
+
+rmDispatcher处理RMAppAttemptEventType.ATTEMPT_NEW_SAVED事件
+	ApplicationAttemptEventDispatcher.handle
+		RMAppAttempt.handle
+			RMAppAttemptImpl.handle			//触发状态机的转换，当前状态为RMAppAttemptState.ALLOCATED_SAVING
+				RMAppAttemptState.ALLOCATED_SAVING==(RMAppAttemptEventType.ATTEMPT_NEW_SAVED,AttemptStoredTransition)==> RMAppAttemptState.ALLOCATED
+					AttemptStoredTransition.transition
+						appAttempt.launchAttempt
+							向rmDispatcher发送AMLauncherEventType.LAUNCH事件
+
+rmDispatcher处理AMLauncherEventType.LAUNCH事件
+	applicationMasterLauncher.handle
+		进入LAUNCH分支
+			launch
+				createRunnableLauncher					//创建一个AMLauncher对象，是指是一个Runnable
+				加入到masterEvents，待ApplicationMasterLauncher中的launcherHandlingThread线程处理，具体执行AMLauncher.run
+				AMLauncher.run
+					进入LAUNCH分支
+						launch								//!!!!!关键
+							获取AM的ContainerID,提交的AM的上下文。并根据这些构造一个登陆AMContainer的请求。
+							然后继续构造为开启容器请求scRequest以及allRequests(表示集合的)。
+							containerMgrProxy.startContainers
+								...			!!!!!代理启动NM上的Container，下面详细说明
+							处理响应StartContainersResponse
+						向rmDispatcher发送RMAppAttemptEventType.LAUNCHED事件
+							
+rmDispatcher处理RMAppAttemptEventType.LAUNCHED事件
+	ApplicationAttemptEventDispatcher.handle
+		RMAppAttemptImpl.handle				//处理状态机
+			RMAppAttemptState.ALLOCATED==(RMAppAttemptEventType.LAUNCHED,AMLaunchedTransition)==>RMAppAttemptState.LAUNCHED
+				AMLaunchedTransition.transition				
+					appAttempt.attemptLaunched			//向AMLivelinessMonitor监控
+					注册token...
+
+AMLauncher.launch的中containerMgrProxy.startContainers分析
+containerMgrProxy的构建
+	getContainerMgrProxy构建containerMgrProxy对象
+		获取AM要启动的Node的NodeId以及端口和地址
+		构造HadoopYarnProtoRPC对象rpc
+		最后返回代理。									//这里暂时不深入分析，只知道构造一个远程调用NM的对象
+	
+
+
+/*-----------------以下为NodaManager上的工作------------------------*/
+RM中AM发送的startContainers交给ContainerManagerImpl的server处理，server的具体实现为ContainerManagementProtocolPBServiceImpl
+	ContainerManagementProtocolPBServiceImpl.startContainers
+		构造一个StartContainersRequestPBImpl请求
+		real.startContainers												// real实质就是ContainerManagerImpl对象，调用层次过多，这里暂时不形成文档
+			ContainerManagerImpl.startContainers
+				...稍后分析
+		讲响应转化为可序列化的响应，供RM中的AM接收
+注:经验之谈，***PBImpl之类的函数一般都是要将普通类序列化的
+
+ContainerManagerImpl.startContainers
+	获取remoteUgi, token
+	authorizeUser			//认证
+	遍历所有发来的请求
+		验证token
+		startContainerInternal
+			验证token，看是否为之前的RM发配的token
+			构造登陆Container的上下文ContainerLaunchContext
+			getAuxServiceMetaData获取serviceData数据			//暂时不考虑附加服务
+			构造ContainerImpl对象
+				context.getContainers().putIfAbsent
+					将这个构造的ContainerImpl对象加入到NMContext.containers中
+					//NMContext.containers是一个map, key为ContainerID，value为Container,用来记录当前节点运行的所有Container
+				构造一个ApplicationImpl对象
+					将这个构造的ContainerImpl对象加入到NMContext.applications中
+					//NMContext.applications是一个map, key为ApplicationID，value为Application,用来记录当前节点运行的所有Application
+					如果这个应用是第一次创建，就NMContext.stateStore.storeApplication,实质为rmStore,(如果配置yarn.nodemanager.recovery.enabled为true会调用NMLeveldbStateStoreService类的storeApplication方法)
+						NMLeveldbStateStoreService.storeApplication				//暂时不分析
+						存储完状态之后，向ContainerManagerImpl发送ApplicationEventType.INIT_APPLICATION事件
+					NMContext.stateStore.storeContainer									//暂时不分析
+					向ContainerManagerImpl发送ApplicationEventType.INIT_CONTAINER事件
+					getContainerTokenSecretManager().startContainerSuccessful	//处理token
+					更新NodeManager的参数系统，更新登陆的Container数据，资源的占用量
+		将这个Container加入到succeededContainers中，抛出异常会加入到failedContainers
+		
+ContainerManagerImpl处理事件ApplicationEventType.INIT_APPLICATION
+	ApplicationEventDispatcher.handle
+		ApplicationImpl.handle					//执行状态机转换，ApplicationImpl的初始状态为NEW
+			ApplicationState.NEW==(ApplicationEventType.INIT_APPLICATION,AppInitTransition)==>ApplicationState.INITING
+				AppInitTransition.transition
+					设置app的acls，logAggregation
+        	向ContainerManagerImpl发送LogHandlerEventType.APPLICATION_STARTED事件
+
+ContainerManagerImpl处理LogHandlerEventType.APPLICATION_STARTED事件      
+	由ServiceInit的局部变量logHandler处理，需要开启日志聚集才可以，具体由LogAggregationService执行
+		LogAggregationService.handle
+			进入APPLICATION_STARTED分支
+				initApp
+					verifyAndCreateRemoteLogDir
+					initAppAggregator									//日志聚集的功能暂时部分析
+					给ContainerManagerImpl发送ApplicationEventType.APPLICATION_LOG_HANDLING_INITED事件
+
+ContainerManagerImpl处理ApplicationEventType.APPLICATION_LOG_HANDLING_INITED事件
+	ApplicationEventDispatcher.handle
+		ApplicationImpl.handle									//状态机转换,实际没有发生状态的转换
+			ApplicationState.INITING==(ApplicationEventType.APPLICATION_LOG_HANDLING_INITED,AppLogInitDoneTransition)==>ApplicationState.INITING,
+				AppLogInitDoneTransition.transition
+					向ContainerManagerImpl发送LocalizationEventType.INIT_APPLICATION_RESOURCES事件
+
+ContainerManagerImpl处理LocalizationEventType.INIT_APPLICATION_RESOURCES事件				
+	rsrcLocalizationSrvc.handle				//即ResourceLocalizationService.handle
+		handleInitApplicationResources
+			把资源放入privateRsrc和appRsrc待处理
+				向ContainerManagerImpl发送ApplicationEventType.APPLICATION_INITED
+
+ContainerManagerImpl处理ApplicationEventType.APPLICATION_INITED 		          
+	ApplicationEventDispatcher.handle					//状态机转换
+		ApplicationState.INITING==(ApplicationEventType.APPLICATION_INITED,AppInitDoneTransition)==>ApplicationState.RUNNING
+			AppInitDoneTransition.transition
+				对当前app下面的所有container，向ContainerManagerImpl发送ContainerEventType.INIT_CONTAINER事件
+
+ContainerManagerImpl处理ContainerEventType.INIT_CONTAINER事件
+	ContainerEventDispatcher.handle
+		ContainerEventType.NEW==(ContainerEventType.INIT_CONTAINER,RequestResourcesTransition)==>ContainerState.LOCALIZING(或其他)
+			RequestResourcesTransition.transition			//资源本地化相关，步骤较为复杂，待研究资源本地化的时候具体分析(?????)，这里只分析一个分支
+				具体就是讲请求的本地化资源加入待本地化类表中等待本地化。
+					向ContainerManagerImpl发送LocalizationEventType.INIT_CONTAINER_RESOURCES事件
+
+ContainerManagerImpl处理LocalizationEventType.INIT_CONTAINER_RESOURCES事件
+	ResourceLocalizationService.handle
+		进入INIT_CONTAINER_RESOURCES分支
+			handleInitContainerResources
+				获取所有的tracker处理ResourceEventType.REQUEST事件，交给LocalResourcesTrackerImpl执行
+
+LocalResourcesTrackerImpl(可能是public,private,application中的一个)处理ResourceEventType.REQUEST事件
+	构造LocalizedResource放入localrsrc中，待轮询执行
+		给LocalizedResource发送ResourceEventType.REQUEST事件
+		判断事件是否为LOCALIZED，是就保存(调用NMLeveldbStateStoreService.finishResourceLocalization)
+		
+LocalizedResource处理ResourceEventType.REQUEST事件
+	使用状态机进行转换
+	ResourceState.INIT==(ResourceEventType.REQUEST,FetchResourceTransition)==>ResourceState.DOWNLOADING,
+		FetchResourceTransition.transition
+			...
+			给LocalizerTracker发送LocalizerEventType.REQUEST_RESOURCE_LOCALIZATION
+				
+LocalizerTracker处理事件LocalizerEventType.REQUEST_RESOURCE_LOCALIZATION
+	添加public队列或设置新的runner下载
+		
+......
+PublicLocalizer.run方法会触发ResourceLocalizedEvent(ResourceEventType.LOCALIZED)事件(还有其他的位置，详细待资源本地化中分析)
+	会触发状态机:
+		ResourceState.DOWNLOADING==(ResourceEventType.LOCALIZED,FetchSuccessTransition)==>ResourceState.LOCALIZED
+    	FetchSuccessTransition.transition
+				对每个队列(容器本地化的队列?????)ContainerManagerImpl发送ContainerEventType.RESOURCE_LOCALIZED事件
+				
+ContainerManagerImpl处理ContainerEventType.RESOURCE_LOCALIZED事件
+	ContainerEventDispatcher.handle
+		ContainerImpl.handle			//触发状态转换
+			ContainerState.LOCALIZING==(ContainerEventType.RESOURCE_LOCALIZED,LocalizedTransition)=>ContainerState.LOCALIZED(LOCALIZING)
+				LocalizedTransition.transition
+					通过判断container的pendingResources是否为空，不是空代表资源本地化未完成，否则代表完成。(这里只考虑完成的情况)
+						向ContainerManagerImpl发送LocalizationEventType.CONTAINER_RESOURCES_LOCALIZED事件
+					container.sendLaunchEvent
+						给ContainerManagerImpl发送ContainersLauncherEventType.LAUNCH_CONTAINER
+					...
+
+ContainerManagerImpl处理LocalizationEventType.CONTAINER_RESOURCES_LOCALIZED事件
+	ResourceLocalizationService.handle
+		handleContainerResourcesLocalized
+			kill资源本地化相关组件
+
+ContainerManagerImpl处理ContainersLauncherEventType.LAUNCH_CONTAINER事件
+	ContainersLauncher.handle
+		获取app对象
+			构造ContainerLaunch对象，并将其提交到线程池中，并记录到running中。放在线程池中执行，需要关注其call方法。
+
+ContainerLaunch.call
+	构造登陆Container的上下文，命令参数，环境变量等。
+	exec.writeLaunchEnv					//把文件写到脚本中
+	给ContainerManagerImpl发送ContainerEventType.CONTAINER_LAUNCHED事件
+	保存状态
+	exec.activateContainer			//记录了pid文件的路径，这里还没有写pid文件的内容
+	exec.launchContainer				//以DefaultContainerExecutor分析
+		DefaultContainerExecutor.launchContainer
+			创建Container,日志,tmp文件夹,拷贝token,脚本到工作文件夹
+			writeLocalWrapperScript				//主要是为了获取pid，并启动真实的脚本
+			构造shell执行其shExec,使用shell执行脚本
+			... 										//应该是阻塞执行脚本....				截止到这里就已经完成在NM上启动一个AM了
+	finally的保存工作
+	给ContainerManagerImpl发送ContainerEventType.CONTAINER_EXITED_WITH_SUCCESS事件
+			
+
+
+			
+ContainerManagerImpl处理ContainerEventType.CONTAINER_LAUNCHED事件			
+	ContainerEventDispatcher.handle
+		ContainerImpl.handle
+			ContainerState.LOCALIZED==(ContainerEventType.CONTAINER_LAUNCHED,LaunchTransition)==>ContainerState.RUNNING,
+				container.sendContainerMonitorStartEvent
+					获取和计算当前container的物理内存，虚拟内存，cpu核心数目，随事件传递
+					给ContainerManagerImpl发送ContainersMonitorEventType.START_MONITORING_CONTAINER事件
+				更新container的metric,参数等
+
+ContainerManagerImpl处理ContainersMonitorEventType.START_MONITORING_CONTAINER事件
+	ContainersMonitorImpl.handle
+		进入START_MONITORING_CONTAINER分支
+			构造ProcessTreeInfo对象，并加入到containersToBeAdded中
+			#注:	ContainersMonitorImpl有一个后台进程MonitoringThread，run会处理监控工作。具体会发送ContainerKillEvent，暂时不分析。
+
+#下面的这段是与前面的并行运行的，无法保证哪个先运行完成
+ContainerManagerImpl处理事件ApplicationEventType.INIT_CONTAINER
+	ApplicationEventDispatcher.handle
+		ApplicationImpl.handle
+			InitContainerTransition.transition
+				将当前container加入到app下的container列表中
+					然后根据实际的状态进行处理，
+					NEW,INIT
+						直接返回不做处理。
+					RUNNING
+						如果APP为RUNNING状态，则向ContainerManagerImpl发送ContainerEventType.INIT_CONTAINER事件
+					注意: 这里为什么要这样处理呢?主要是因为创建APP和创建Container有两个异步的流程，无法保证这两个异步的流程那个先完成()。
+
+资源本地化相关工作
+	
+
+shell脚本执行器
+	ShellCommandExecutor(command,workDir,environment)
+		ShellCommandExecutor(command,workDir,environment,0)
+			为ShellCommandExecutor.command赋值
+			为Shell(父类).workDir赋值
+			为Shell(父类).environment赋值
+			timeOutInterval赋值为0	
+	ShellCommandExecutor.execute
+		Shell.run
+			检测时间，保证距离上次执行完1ms之后在启动下一次命令
+			设置exitCode为0，会根据执行结果改变
+			runCommand
+				构造一个ProcessBuilder对象，用户启动一个新进程的工具
+				设置环境变量，工作目录，设置不合并标准错误和标准输出
+				builder.start启动进程process
+				判断是否由超时设置，这里没有设置，不考虑。(如果设置超时的话，超过时间会杀死进程)
+				获取这个新进程的输入流和错误流，并进行一系列的处理
+				然后开启一个线程errThread,不断地从错误流中读数据,写入errMsg
+				process.waitFor							//阻塞等待该进程完成
+				等待errThread完成，处理完成标志，分析返回值等。
+总结: 其实仅仅知道ShellCommandExecutor.execute是阻塞执行的即可。
+				
+
+#下面的触发是在Container完成工作的时候进行的
+ContainerManagerImpl处理ContainerEventType.CONTAINER_EXITED_WITH_SUCCESS事件
+	ContainerEventDispatcher.handle
+		ContainerImpl.handle
+			ContainerState.RUNNING==(ContainerEventType.CONTAINER_EXITED_WITH_SUCCESS,ExitedWithSuccessTransition)==>
+ContainerState.EXITED_WITH_SUCCESS
+				ExitedWithSuccessTransition.transition
+					向ContainerManagerImpl发送ContainersLauncherEventType.CLEANUP_CONTAINER事件
+					container.cleanup
+						向ContainerManagerImpl发送LocalizationEventType.CLEANUP_CONTAINER_RESOURCES事件，并传入该container的资源作为参数传入		      
+注:这里异步发送两个事件
+
+
+ContainerManagerImpl处理ContainersLauncherEventType.CLEANUP_CONTAINER事件
+	ContainersLauncher.handle
+		进入CLEANUP_CONTAINER分支
+			把这个container对应的ContainerLaunch从运行的表中移除即可。
+			launcher.cleanupContainer
+				保存工作,设置标记				//!!!!! 需要在重点关注一下CotnainerLaunch相关内容及字段含义
+				deactivateContainer			//将自己从ContainersLauncher的pidFile移除
+				杀死进程									//可能是为了非异常关闭准备的
+
+ContainerManagerImpl处理LocalizationEventType.CLEANUP_CONTAINER_RESOURCES事件
+	ResourceLocalizationService.handle
+		handleCleanupContainerResources
+			...					//资源清理工作，暂不分析
+			向ContainerManagerImpl发送ContainerEventType.CONTAINER_RESOURCES_CLEANEDUP事件
+
+ContainerManagerImpl处理ContainerEventType.CONTAINER_RESOURCES_CLEANEDUP事件
+	ContainerEventDispatcher.handle
+		ContainerImpl.handle					//状态机转换
+			ContainerState.EXITED_WITH_SUCCESS==(ContainerEventType.CONTAINER_RESOURCES_CLEANEDUP,ExitedWithSuccessToDoneTransition)==> ContainerState.DONE,
+				ExitedWithSuccessToDoneTransition.transition
+					更新Container的metric,日志
+					ContainerImpl.ContainerDoneTransition.transition
+						container.sendFinishedEvents
+							发送ApplicationEventType.APPLICATION_CONTAINER_FINISHED事件
+							发送ContainersMonitorEventType.STOP_MONITORING_CONTAINER事件，暂时不分析				
+							发送LogHandlerEventType.CONTAINER_FINISHED事件，暂时不分析
+						AuxServicesEventType.CONTAINER_STOP			//发送额外服务的事件，暂时不分析
+					
+处理ApplicationEventType.APPLICATION_CONTAINER_FINISHED事件					
+ApplicationEventDispatcher.handle
+	ApplicationImpl.handle			//状态机转换
+		ApplicationState.RUNNING==(ApplicationEventType.APPLICATION_CONTAINER_FINISHED,CONTAINER_DONE_TRANSITION)==>ApplicationState.RUNNING
+    	ApplicationImpl.ContainerDoneTransition.transition   
+				把这个完成的Container从app的容器列表中移除
+
+
+containerMgrProxy
+
+
+/*-----------------以上为NodaManager上的工作------------------------*/
+
+
+
+这里分析如何从RMAppAttemptState.LAUNCHED变化为RMAppAttemptState.RUNNING
+这里就要涉及到关于AM程序的写法，(提交一个yarn任务一般需要两个程序，一个是客户端用户提交程序，另一个是真实的AM程序)
+以下是一个标准的AM程序的部分代码(这里省略了大多数代码)，是AM程序向RM注册的过程。
+	rmClient = AMRMClientAsync.createAMRMClientAsync						//rmClient得到一个AMRMClientAsyncImpl对象
+	rmClient.registerApplicationMaster
+		client.registerApplicationMaster													//client为AMRMClientImpl对象
+			AMRMClientImpl.registerApplicationMaster								//远程调用AMS上的registerApplicationMaster方法
+		开启心跳线程
+总结: 这里需要知道的是，一般标准的AM程序都会调用registerApplicationMaster方法进行对AM的远程调用实现注册。(用户必须在AM程序加入注册的代码)
+
+
+这里从AMS的registerApplicationMaster说去
+ApplicationMasterService.registerApplicationMaster
+	...
+		向rmDispatcher发送RMAppAttemptEventType.REGISTERED(RMAppAttemptRegistrationEvent)事件
+	...
+
+rmDispatcher处理RMAppAttemptEventType.REGISTERED事件
+	ApplicationAttemptEventDispatcher.handle
+		RMAppAttemptImpl.handle							//状态机转换
+			RMAppAttemptState.LAUNCHED==(RMAppAttemptEventType.REGISTERED,AMRegisteredTransition)==>RMAppAttemptState.RUNNING
+				AMRegisteredTransition.transition
+					分析发来事件的host,port,trackingurl(待会思考是否是应用程序传来的)
+						向rmDispatcher发送RMAppEventType.ATTEMPT_REGISTERED事件
+
+rmDispatcher处理RMAppEventType.ATTEMPT_REGISTERED事件
+	ApplicationEventDispatcher.handle
+		RMAppImpl.handle			//状态机转换
+			RMAppState.ACCEPTED==(RMAppEventType.ATTEMPT_REGISTERED)=>RMAppState.RUNNING					//单纯转换状态没发送任何动作
+
+截止此时，RMAppImpl和RMAppAttemptImpl都已经是RUNNING状态了。接下来肯定等待Container执行完成了。
+
+
+
+RM端finishApplicationMaster--RMAppFinishedAttemptEvent-->unregister-->***-->将该app放入要清理的列表中，通过心跳响应给NM
+
+ResourceTracker.nodeHeartbeat-->RMNodeImpl.updateNodeHeartbeatResponseForCleanup-->CleanUpAppTransition--
+--(RMNodeEventType.CLEANUP_APP或RMNodeCleanAppEvent)-->FinalTransition
+
+
+关键是如何调用的ApplicationMasterService.finishApplicationMaster方法。
+一般在程序的AM的程序的最后会调用AMRMClientAsyncImpl.unregisterApplicationMaster	(注: 一般是AM或者其启动的所有Container都运行完成会调用该函数。但是，某些Yarn的长任务会忘记写unregister这个操作)
+从	unregisterApplicationMaster开始执行
+AMRMClientAsyncImpl.unregisterApplicationMaster
+	AMRMClientImpl.unregisterApplicationMaster
+		使用代理调用RM，即调用ApplicationMasterService.finishApplicationMaster
+ApplicationMasterService.finishApplicationMaster
+	给rmDispatcher发送RMAppAttemptEventType.UNREGISTERED(RMAppAttemptUnregistrationEvent)事件
+
+rmDispatcher处理RMAppAttemptUnregistrationEvent事件
+	ApplicationAttemptEventDispatcher.handle
+		RMAppAttemptImpl.handle					//状态机转换
+			RMAppAttemptState.RUNNING==(RMAppAttemptEventType.UNREGISTERED,AMUnregisteredTransition)==>RMAppAttemptState.FINISHED
+ 				AMUnregisteredTransition.transition
+					updateInfoOnAMUnregister
+					不考虑unmanagedAM
+					发送RMAppEventType.ATTEMPT_UNREGISTERED
+
+处理RMAppEventType.ATTEMPT_UNREGISTERED事件
+ApplicationEventDispatcher.handle
+	RMAppImpl.handle									//触发状态转换
+		RMAppState.RUNNING==(RMAppEventType.ATTEMPT_UNREGISTERED,FinalSavingTransition)==>RMAppState.FINAL_SAVING
+			FinalSavingTransition.transition					//构造函数的三个参数分别为AttemptUnregisteredTransition，FINISHING，FINISHED
+				rememberTargetTransitionsAndStoreState
+        ...			//暂时忽略
+				发送RMStateStoreEventType.UPDATE_APP事件
+
+处理RMStateStoreEventType.UPDATE_APP事件
+	UpdateAppTransition.transition
+		updateApplicationStateInternal
+		notifyApplication
+			发送RMAppEventType.APP_UPDATE_SAVED事件
+
+处理发送RMAppEventType.APP_UPDATE_SAVED事件
+	ApplicationEventDispatcher.handle
+		RMAppImpl.handle								//触发状态转换
+			RMAppState.FINAL_SAVING==(RMAppEventType.APP_UPDATE_SAVED,FinalStateSavedTransition)==>RMAppState.FINISHED
+				FinalStateSavedTransition.transition						//注意这里要用的参数就是FinalSavingTransition中的三个参数
+					AttemptUnregisteredTransition
+						FinalTransition.transition
+							向一些节点发送RMNodeCleanAppEvent(RMNodeEventType.CLEANUP_APP)事件
+							发送AppRemovedSchedulerEvent(SchedulerEventType.APP_REMOVED)事件
+							发送RMAppManagerEventType.APP_COMPLETED事件
+							写历史记录参数
+
+处理RMNodeEventType.CLEANUP_APP事件
+	CleanUpAppTransition.transition
+		会把当前的app加入到finishedApplications中													!!!!!tmd,很重要，响应心跳包通知NM应用删除
+
+处理SchedulerEventType.APP_REMOVED事件
+	SchedulerEventDispatcher.handle
+		放入队列再取出，执行FairScheduler.handle
+			FairScheduler.handle
+				进入APP_REMOVED分支
+					removeApplication					//移除应用
+
+处理RMAppManagerEventType.APP_COMPLETED事件
+RMAppManager.handle									//主要从应用管理器中移除
+	finishApplication
+	logApplicationSummary
+	checkAppNumCompletedLimit
+	
+#这里还有一个重要分支
+CleanUpAppTransition中设置了finishedApplications，然后ResourceTrackerService.nodeHeartbeat将要移除的app通过心跳响应发送给NM
+NM在NodeStatusUpdaterImpl的线程statusUpdaterRunnable会不断的检查RM是否由APP要释放。如果有会调用CMgrCompletedAppsEvent事件,并发送给NM的dispatcher处理。
+
+/*-----------------以下为NodaManager上的工作------------------------*/
+NM的dispatcher处理CMgrCompletedAppsEvent(ContainerManagerEventType.FINISH_APPS)事件
+	ContainerManagerImpl.handle
+		进入FINISH_APPS分支
+			对所有的要清除的APP执行保存工作，然后发送ApplicationEventType.FINISH_APPLICATION事件
+
+处理ApplicationEventType.FINISH_APPLICATION事件
+
+ApplicationEventDispatcher.handle
+	ApplicationImpl.handle
+		ApplicationState.RUNNING==(ApplicationEventType.FINISH_APPLICATION,AppFinishTriggeredTransition)==>ApplicationState.FINISHING_CONTAINERS_WAIT,APPLICATION_RESOURCES_CLEANINGUP
+			AppFinishTriggeredTransition
+				如果当前app下的Container为空
+					handleAppFinishWithContainersCleanedup
+						发送LocalizationEventType.DESTROY_APPLICATION_RESOURCES事件
+						发送AuxServicesEventType.APPLICATION_STOP事件							//暂不分析额外服务
+					返回ApplicationState.APPLICATION_RESOURCES_CLEANINGUP
+				如果当前app下的Container不为空								//这里不考虑这里，因为正常应该所有Container都结束了，再执行unregisterApplicationMaster
+					遍历aap下的Container，发送ContainerEventType.KILL_CONTAINER
+					返回ApplicationState.FINISHING_CONTAINERS_WAIT
+
+
+处理LocalizationEventType.DESTROY_APPLICATION_RESOURCES事件
+ResourceLocalizationService.handle
+	handleDestroyApplicationResources
+		... 资源清理工作，待深入资源本地化后在分析
+		发送ApplicationEventType.APPLICATION_RESOURCES_CLEANEDUP事件
+
+处理ApplicationEventType.APPLICATION_RESOURCES_CLEANEDUP事件
+ApplicationEventDispatcher.handle
+	ApplicationImpl.handle							//状态转换	
+		ApplicationState.APPLICATION_RESOURCES_CLEANINGUP==(ApplicationEventType.APPLICATION_RESOURCES_CLEANEDUP,AppCompletelyDoneTransition) ==>ApplicationState.FINISHED
+			发送LogHandlerEventType.APPLICATION_FINISHED事件
+				
+处理LogHandlerEventType.APPLICATION_FINISHED事件
+LogAggregationService.handle
+	进入APPLICATION_FINISHED分支
+		stopContainer			//日志处理相关操作
+
+！！！！！！！！！！！！！！！！！！就此一个AM启动的流程结束
+
+/*-----------------以上为NodaManager上的工作------------------------*/
+
+组件介绍:
+(A) ApplicationMasterLauncher
+	有组件launcherHandlingThread，它是一个线程类，会在seviceStart中启动。具体的执行是不断地轮询处理masterEvents的runnable对象，并交给线程池launcherPool处理。
+
+
+
+
+/*------------------以下是AM启动自己的Contianer的过程-----------------------------------------------*/
+下面仅仅分析一个简单的程序，AM程序申请启动一个Container。
+AM中仅仅一个addContainerRequest动作，从这里分析(具体详见"AM应用程序的分析")
+具体的参数是一个请求，即ContainerRequest。这里假定传入参数capability(内存和cpu核心数)，nodes为空，racks为空，priority为优先级
+		//注:ContainerRequest.relaxLocality为true表示不用指定必须在某个节点上执行。
+
+
+AMRMClientAsyncImpl.addContainerRequest
+	AMRMClientImpl.addContainerRequest							// 参数是AM程序传入的ContainerRequest对象
+		获取传入的机架，并使用Set清除了重复的机架名称，得到dedupedRacks
+		resolveRacks				//猜测是请求中节点相关的机架名称列表inferredRacks，具体暂不分析
+		inferredRacks.removeAll(dedupedRacks)			//?????
+		checkLocalityRelaxationConflict
+			分别检查某个位置上的某个优先级请求是否与提交的relaxLocality一致，不一致就错误。		//hadoop的严格要求
+			注:一共调用三次，分别检查ANY_LIST，dedupedRacks，inferredRacks的请求是否一致
+		checkNodeLabelExpression			//及参会NodeLabel是否可用
+		然后对传入的nodes进行重复清理得到dedupedNodes
+		然后对每一个dedupedNodes遍历，执行addResourceRequest
+			addResourceRequest
+				这里会把node请求加入到remoteRequests中第?????层value中。
+				如果设置了relaxLocality，会把req加入到containerRequests中。
+				如果资源名称为*,就为remoteRequest设置NodeLabel
+				最后把请求放到ask中
+				注意:remoteRequestsTable
+		然后分别对dedupedRacks和inferredRacks执行addResourceRequest操作。					?????到底加入哪个请求
+		对Off-switch执行类似的处理
+
+总结: addContainerRequest这个函数仅仅是讲请求加入到了remoteRequestsTable和ask列表中。待心跳包处理。
+
+AMRMClientImpl.remoteRequestsTable组件，是一个三层的map
+第一层的key是Priority
+第二层的key是资源名称
+第三层的key为Resource(或者说capability)
+第三层的value为ResourceRequestInfo
+
+AMRMClientImpl.ask组件
+是一个Set,具体存储ResourceRequest
+
+AM向RM发送心跳包
+AM中的AMRMClientAsyncImpl中启动一个线程heartbeatThread，用于给RM发送心跳包。
+HeartbeatThread.run					//具体的心跳的时间间隔在createAMRMClientAsync调用时候设置
+	client.allocate
+		AMRMClientImpl.allocate
+			构造askList,猜测是向RM请求资源列表，将ask这个Set里面的内容都放入其中。
+			然后构造releaseList,猜测是通知RM释放资源的列表，讲release这个Set里面的内容放入其中。
+			处理黑名单
+			跟前前面的设置构造一个AllocateRequest请求。
+			rmClient.allocate			//远程调用RM的ApplicationMasterService.allocate
+				...					//RM中的调用
+			根据响应，更新
+		判断	allocate的返回值，如果不为空，放入responseQueue待处理
+
+ApplicationMasterService.allocate
+	amLivelinessMonitor.receivedPing		//估计是通知其接收心跳，表示AM健康
+	获取锁
+	判断AppAttemptId是否已经注册过
+	根据ResponseId确定心跳包。如果是上一次的id，直接返回之前的处理结果。如果是更早的抛出异常。
+	过滤非法进程				?????
+	向rmDispatcher发送RMAppAttemptEventType.STATUS_UPDATE事件
+	...				//一些设置检查工作
+	rScheduler.allocate
+		FairScheduler.allocate				//前面简略分析了(仍需要详细分析)，使用FairSchedule中分配资源
+	设置响应allocateResponse(包括资源分配结果)并返回
+	
+FairScheduler.allocate之后，调度器的后台进程会启动一个RMContainer,然后又会通过心跳发送一个个
+！！！！！！！！！！！！！！！！！！！！！！！！！！！！到这里了！！！！！！！！！！！！！！！！！！！！！！！！！！！！
+
+
+rmDispatcher处理RMAppAttemptEventType.STATUS_UPDATE事件		
+	ApplicationAttemptEventDispatcher.handle
+		RMAppAttemptImpl.handle
+			RMAppAttemptState.RUNNING==(RMAppAttemptEventType.STATUS_UPDATE,StatusUpdateTransition)==>RMAppAttemptState.RUNNING,
+          更新appAttempt.progress，表示进度?????
+					AMLivelinessMonitor.receivedPing
+					
+
+
+
+
+
+
+
+
+
+
+
+

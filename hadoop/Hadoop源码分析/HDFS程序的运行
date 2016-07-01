@@ -1,0 +1,51 @@
+调试方法: export HADOOP_ROOT_LOGGER=DEBUG,console
+hdfs dfs -ls /test
+根据脚本选择"dfs"会调用类org.apache.hadoop.fs.FsShell，参数为"dfs" "-ls" "/test"
+FsShell.main
+	构造FsShell对象,给Configuration对象
+	关闭安静模式
+	ToolRunner.run
+		ToolRunner.run
+			GenericOptionsParser
+				parseGeneralOptions
+					构造选项，分析器，分析命令行。
+					processGeneralOptions
+						如果命令行有fs这个命令行，就设置文件系统的默认schema，这里"/test"没有设置shema，会使用默认的"hdfs://"
+			getRemainingArgs
+				这里返回未识别的参数，其中之前的options中没有增加"-ls",所以这里返回"-ls" "/test"
+			tool.run
+				FsShell.run					//参数为"-ls" "/test"
+					构造一个Command对象instance，实际是org.apache.hadoop.fs.shell.Ls类
+					Command.run				//传入参数为"/test"
+						Ls.processOptions			//这里没有设置ls的选项。加上-d表示查询目录，-R递归查询，-h可以将文件大小方便阅读的格式。
+						Command.processRawArguments
+							Command.processArguments				//这里的传入参数是expandArguments(args)，expandArguments留作稍后分析
+								遍历参数列表("这里为"/test"转化的PathData)，调用Ls.processArgument
+									Ls.processPathArgument
+										//这里暂时不考虑递归
+										Command.processPathArgument
+											Ls.processPaths
+												打印查找到几个项目
+												调整列的宽度。
+												Command.processPaths
+													遍历PathData
+													Ls.processPath				//打印到查询的一列数据
+													暂时不考虑递归查找recursePath
+													Command.postProcessPath				//do nothing
+			
+Command.expandArguments					// 参数传入为"/test"
+	主要是遍历字符串列表，然后expandArgument构造PathData结构体，重新组成PathData列表
+	expandArgument
+		PathData.expandAsGlob
+			根据传入的"/test"和conf构造Path对象globPath和DFs文件系统对象fs
+			fs.globStatus							//获取状态
+				...
+			...
+			
+
+														
+
+
+
+
+

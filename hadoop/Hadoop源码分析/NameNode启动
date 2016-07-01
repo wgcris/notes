@@ -1,0 +1,25 @@
+从启动脚本开始分析
+
+start-dfs.sh
+  "$HADOOP_PREFIX/sbin/hadoop-daemons.sh" \
+    --config "$HADOOP_CONF_DIR" \
+    --hostnames "$NAMENODES" \
+    --script "$bin/hdfs" start namenode $nameStartOpt	
+其中, NAMENODES=$($HADOOP_PREFIX/bin/hdfs getconf -namenodes)
+  调用bin/hdfs，实际是执行了 GetConf类，并传入参数-namenodes
+  NameNodesCommandHandler:doWorkInternal
+    会得到dfs.namenode.servicerpc-address和dfs.namenode.rpc-address的地址(如果没设置会用到fs.defaultFS的值)
+  NAMENODES得到所有NameNode的地址
+...
+
+
+
+
+
+
+
+nohup nice -n $HADOOP_NICENESS $hdfsScript --config $HADOOP_CONF_DIR $command "$@" > "$log" 2>&1 < /dev/null &
+
+执行
+bin/hdfs --config $HADOOP_CONF_DIR namenode
+

@@ -1,0 +1,289 @@
+(1) dfs.nameservices
+  <name>dfs.nameservices</name>
+  <value>ns1</value>
+说明: HDFS集群的逻辑名称。
+
+(2) dfs.ha.namenode.${dfs.nameservices的一个value}
+  <name>dfs.ha.namenodes.ns1</name>
+  <value>nn1,nn2</value> 
+说明: ns1集群下面设置的两个namenode的名称。
+
+(3) dfs.namenode.rpc-address.${dfs.nameservices的一个value}.${dfs.ha.namenode.${dfs.nameservices的一个value}的一个value}
+说明: 监听的RPC地址和端口，客户端可以通过该IP和端口对相应的namenode进行RPC访问。
+	另外，也作为NameNode的地址，用于启动NameNode.
+  <name>dfs.namenode.rpc-address.ns1.nn1</name>
+  <value>BJHC-Client-7543.hadoop.jd.local:8020</value>
+说明: ns1的nn1监听RPC的IP地址和端口
+  <name>dfs.namenode.rpc-address.ns1.nn2</name>
+  <value>BJHC-Client-9134.hadoop.jd.local:8020</value>
+说明: ns1的nn2监听RPC的IP地址和端口
+
+(4) dfs.namenode.http-address.${dfs.nameservices的一个value}.${dfs.ha.namenode.${dfs.nameservices的一个value}的一个value}
+说明: 监听的RPC地址和端口，客户端可以通过该IP和端口对相应的namenode进行HTTP访问
+  <name>dfs.namenode.http-address.ns1.nn1</name>
+  <value>BJHC-Client-7543.hadoop.jd.local:50070</value>
+说明: ns1的nn1监听HTTP的IP地址和端口
+  <name>dfs.namenode.http-address.ns1.nn2</name>
+  <value>BJHC-Client-9134.hadoop.jd.local:50070</value>
+说明: ns1的nn2监听HTTP的IP地址和端口
+
+(5) dfs.namenode.servicerpc-address.${dfs.nameservices的一个value}.${dfs.ha.namenode.${dfs.nameservices的一个value}的一个value}
+说明: 监听的RPC地址和端口，NameNode可以通过该IP和端口对相应的namenode进行HTTP访问
+	 另外，也作为NameNode的地址，用于启动NameNode.
+    <name>dfs.namenode.servicerpc-address.ns1.nn1</name>
+    <value>BJHC-Client-7543.hadoop.jd.local:8021</value>
+说明: ns1的nn1监听RPC的IP地址和端口
+    <name>dfs.namenode.servicerpc-address.ns1.nn2</name>
+    <value>BJHC-Client-9134.hadoop.jd.local:8021</value>
+说明: ns1的nn2监听HTTP的IP地址和端口
+
+(6) dfs.replication
+    <name>dfs.replication</name>
+    <value>3</value>
+说明: HDFS存放文件的副本数
+
+(7) dfs.namenode.shared.edits.dir
+    <name>dfs.namenode.shared.edits.dir</name>
+    <value>qjournal://BJHC-Client-77107.hadoop.jd.local:8485;BJHC-Client-77108.hadoop.jd.local:8485;BJHC-Client-77109.hadoop.jd.local:8485/ns1</value>
+说明: 这是NameNode读取一个JouranlNode组的uri，用于读写edit log内容。
+其中格式为qjournal://${一组JouranlNode的地址，冒号隔开}/#{集群逻辑名}
+
+(8) dfs.journalnode.edits.dir
+    <name>dfs.journalnode.edits.dir</name>
+    <value>/data0/journal/data</value>
+说明: JouranlNode存放edits文件的路径
+
+(9) dfs.client.failover.proxy.provider.[nameservice ID]
+说明: HDFS Client连接Namenode所使用的类，Client可以通过此类来判定哪个Namenode为Alive，并与它保持通信。
+	该类维持一组NN,猜测是通过各种尝试找到alive的NameNode供使用
+    <name>dfs.client.failover.proxy.provider.ns1</name> 
+    <value>org.apache.hadoop.hdfs.server.namenode.ha.ConfiguredFailoverProxyProvider</value>
+(10) dfs.ha.fencing.*
+	由于某中原因(譬如Active超时)使ZooKeeper认为当前的Active异常，会进行重新选举。为了避免两个Active同时工作，需要进行fencing。具体是新的Active在切换置换之前通过ZKFailoverController通过/hadoop-ha/${dfs.nameservices}/ActiveBreadCrumb(由原来的Active创建，持久性节点，之前的Active未关闭，所以保留)记录的节点信息来杀死旧的Active。
+	dfs.ha.fencing.methods就是使用的具体的fencing的方法，即杀死旧的Active的方法。
+	其中sshfence会经过n层调用通过SshFenceByTcpPort作具体的实现。			//注:具体通过NNHAServiceTarget的构造函数构造fencer对象，以供需要的时候使用
+ 	自认可以猜测dfs.ha.fencing.ssh.private-key-files和dfs.ha.fencing.ssh.connect-timeout分别为ssh的私钥文件的位置和该ssh连接的超时时长。			//具体暂时不分析
+    <name>dfs.ha.fencing.methods</name>
+    <value>sshfence</value>
+    <name>dfs.ha.fencing.ssh.private-key-files</name>
+    <value>/home/hadp/.ssh/id_rsa</value>
+    <name>dfs.ha.fencing.ssh.connect-timeout</name>
+    <value>30000</value>
+
+(11) dfs.ha.automatic-failover.enabled
+    <name>dfs.ha.automatic-failover.enabled</name>
+    <value>true</value>
+说明: 是否开启NameNode的自动切换功能
+
+(12) dfs.namenode.name.dir
+    <name>dfs.namenode.name.dir</name>
+    <value>/data0/nn</value>
+说明: 配置HDFS元数据存放路径，可设置多个路径冗余，多个路径用逗号隔开。
+
+(13) dfs.blocksize
+    <name>dfs.blocksize</name>
+    <value>134217728</value>
+注: HDFS一个数据块的大小，单位字节。
+
+(14) dfs.datanode.du.reserved
+    <name>dfs.datanode.du.reserved</name>
+    <value>53687091200</value>
+注: 一个磁盘上为非HDFS数据预留的空间。由于硬盘空间是固定的，这里实际也是固定了HDFS能使用磁盘空间的大小。
+
+(15) dfs.namenode.handler.count
+    <name>dfs.namenode.handler.count</name>
+    <value>140</value>
+注: NameNode用于处理RPC请求的线程数。
+
+(16) dfs.datanode.max.transfer.threads
+    <name>dfs.datanode.max.transfer.threads</name>
+    <value>65536</value>
+说明: DataNode在进行文件传输时最大线程数
+DataXceiverServer这个线程会限制
+DataNode中dataXceiverServer维护一组后台线程，注册的地址为0.0.0.0:50010(这个是默认值，一般由dfs.datanode.address设置)，并且run函数中会限制线程组最大的线程数。(这样限制是否有问题???)
+
+(17) dfs.datanode.balance.bandwidthPerSec
+    <name>dfs.datanode.balance.bandwidthPerSec</name> 
+    <value>10485760</value> 
+说明: 定义了每个DataNode平衡操作所允许的最大使用带宽，这个值的单位是byte/second
+
+
+(18) dfs.datanode.data.dir
+    <name>dfs.datanode.data.dir</name>
+    <value>/data0/dfs,/data1/dfs,/data2/dfs,/data3/dfs,/data4/dfs,/data5/dfs,/data6/dfs,/data7/dfs,/data8/dfs,/data9/dfs,/data10/dfs,/data11/dfs</value>
+说明: HDFS存放元数据的位置，可设置多个路径冗余，多个路径用逗号隔开。
+更正!!!!!这里不是冗余!!!!!
+
+(19) dfs.hosts
+    <name>dfs.hosts</name>
+    <value>/software/servers/hadoop-2.2.0/etc/hadoop/hosts/datanode_hosts</value>
+说明: 用于存储容许加入集群或者说与NameNode通信的所有DataNode节点的配置文件。
+
+(20) dfs.hosts.exclude
+    <name>dfs.hosts.exclude</name>
+    <value>/software/servers/hadoop-2.2.0/etc/hadoop/hosts/exclude_datanode_hosts</value>
+说明: 记录要淘汰的节点。设置后通过"hadoop dfsadmin -refreshNodes"迁移数据。
+
+(21)dfs.checksum.type
+    <name>dfs.checksum.type</name>
+    <value>CRC32</value>
+说明: 数据校验的方法
+
+(22) ha.health-monitor.rpc-timeout.ms
+    <name>ha.health-monitor.rpc-timeout.ms</name>
+    <value>180000</value>
+说明: zkfc中的HealthMonitor组件，HealthMonitor会不断的监控Active的状态，一旦出现连接超时就会发现进入SERVICE_NOT_RESPONDING状态，会调用ActiveStandbyElector选举切换状态。
+
+(23) dfs.image.transfer.timeout
+    <name>dfs.image.transfer.timeout</name>
+    <value>1800000</value>
+说明: fsimage文件传输的超时时间，Active从Standby下载镜像的时间。
+
+(24) dfs.datanode.failed.volumes.tolerated
+    <name>dfs.datanode.failed.volumes.tolerated</name>
+    <value>3</value>
+说明： 导致DataNode挂掉的硬盘损害数
+
+(25) dfs.client.socket-timeout
+    <name>dfs.client.socket-timeout</name>
+    <value>180000</value>
+说明: 以下时间由上面设置。
+DataTransfer(DataNode之前数据传递)用于传输数据的超时时间
+BlockRecord(块恢复)用于传输数据的超时时间
+????? 觉得还应该有其他的时间
+
+(26) dfs.namenode.support.allow.format
+    <name>dfs.namenode.support.allow.format</name>
+    <value>true</value>
+说明: 设置是否允许在运行过程中对NM进行格式化
+
+    <name>dfs.namenode.service.handler.count</name>
+    <value>140</value>
+说明: NameNode用来处理客户端的远程过程调用的一个工作线程池的线程数
+
+(27)white.list.enable
+    <name>white.list.enable</name>
+    <value>false</value>
+说明: 白名单配功能是否开启
+
+(28) white.list.file.dir
+    <name>white.list.file.dir</name>
+    <value>/software/servers/hadoop-2.2.0/etc/hadoop//whitelist.xml</value>
+说明: 白名单路径 
+
+(29) black.list.file.dir
+    <name>black.list.file.dir</name>
+    <value>/software/servers/hadoop-2.2.0/etc/hadoop//blacklist.xml</value>
+说明: 黑名单路径
+
+(30) sensitive.path.file.dir
+    <name>sensitive.path.file.dir</name>
+    <value>/software/servers/hadoop-2.2.0/etc/hadoop//sensitivepathlist</value>
+说明: 敏感路径列表配置 ???
+
+(31) dfs.failover.provider.host
+    <name>dfs.failover.provider.host</name>
+    <value>BJHC-HADOOP-HERA-168128.jd.local:8018,BJHC-HADOOP-HERA-168129.jd.local:8018,BJHC-HADOOP-HERA-168130.jd.local:8018,BJHC-HADOOP-HERA-16911.jd.local:8018,BJHC-HADOOP-HERA-16912.jd.local:8018</value>
+说明: 配置客户端寻找ActiveNN的路由逻辑类 ???
+
+(32) security.path.file.dir
+ 	<name>security.path.file.dir</name>
+ 	<value>/software/servers/hadoop-2.2.0/etc/hadoop//securitypathlist</value>
+说明: 受保护路径名单配置
+
+(33) dfs.image.transfer.bandwidthPerSec
+    <name>dfs.image.transfer.bandwidthPerSec</name>
+    <value>10485760</value>
+说明: fsimage传输的带宽，与dfs.image.transfer.timeout息息相关。
+
+(34) dfs.datanode.handler.count
+  <name>dfs.datanode.handler.count</name>
+  <value>30</value>
+说明: datanode上用于处理RPC的线程数
+
+(34) dfs.datanode.directoryscan.threads
+  <name>dfs.datanode.directoryscan.threads</name>
+  <value>6</value>
+说明: datanode上用于directory扫描(扫描磁盘上数据块与FsDataSet是否一致)的线程数
+
+(35) dfs.erp.authorization
+  <name>dfs.erp.authorization</name>
+  <value>false</value>
+说明: ERP验证是否开启
+
+(36) dfs.erphost.http-address
+  <name>dfs.erphost.http-address</name>
+  <value>http://bdp.jd.com</value>
+说明: erp认证地址
+
+(37) dfs.urmhost.http-address
+  <name>dfs.urmhost.http-address</name>
+  <value>http://urm2.bdp.jd.local</value>
+说明: URM认证地址
+
+(38) dfs.erp.auth-method
+  <name>dfs.erp.auth-method</name>
+  <value>simple</value>
+说明: 认证方法
+
+(39) dfs.cluster.id
+  <name>dfs.cluster.id</name>
+  <value>ns1</value>
+说明: 集群id
+
+
+附录A：
+NameNode绑定的地址端口与服务
+NameNode构造函数
+	initialize
+		 rpcServer = createRpcServer(conf)		//实质是构造NameNodeRpcServer对象
+		 
+	NameNodeRpcServer的构造函数中又两个对象分别用于为client提供RPC服务的clientRpcServer和为NameNode提供RPC服务的serviceRpcServer
+	下面是这两个对象的构造的代码，这里只关注地址和端口的设置
+		this.serviceRpcServer = new RPC.Builder(conf)
+			.setProtocol(org.apache.hadoop.hdfs.protocolPB.ClientNamenodeProtocolPB.class)
+			.setInstance(clientNNPbService)
+			.setBindAddress(bindHost)
+			.setPort(serviceRpcAddr.getPort()).setNumHandlers(serviceHandlerCount)
+			.setVerbose(false)
+			.setSecretManager(namesystem.getDelegationTokenSecretManager())
+			.build();
+		(1)分析
+		serviceRpcAddr = nn.getServiceRpcServerAddress(conf);
+			NameNode.getServiceAddress(conf, false);
+				//可以知道返回dfs.namenode.servicerpc-address记录的地址与端口
+		bindHost = nn.getServiceRpcServerBindHost(conf);
+				//这里获取dfs.namenode.servicerpc-bind-host记录的地址
+		(2)总结 
+			因此可以知道NameNode为DataNode提供的RPC服务的端口是dfs.namenode.servicerpc-address得到的。
+			提供的地址如果存在dfs.namenode.servicerpc-bind-host存在就使用这个地址，否则用dfs.namenode.servicerpc-address的地址。
+			疑问: dfs.namenode.servicerpc-bind-host的意义?
+		
+		this.clientRpcServer = new RPC.Builder(conf)
+			.setProtocol(org.apache.hadoop.hdfs.protocolPB.ClientNamenodeProtocolPB.class)
+			.setInstance(clientNNPbService).setBindAddress(bindHost)
+			.setPort(rpcAddr.getPort()).setNumHandlers(handlerCount)
+			.setVerbose(false)
+			.setSecretManager(namesystem.getDelegationTokenSecretManager()).build();
+		(1)分析
+		rpcAddr = nn.getRpcServerAddress(conf);
+			getAddress
+				获取了fs.defaultFS的value作为地址
+		bindHost = nn.getRpcServerBindHost(conf);
+			设置了dfs.namenode.rpc-bind-host的value为地址
+		bindHost = rpcAddr.getHostName();			//binHost为null执行
+		(2)总结
+			因此可以知道NameNode为DataNode提供的RPC服务的端口是fs.defaultFS得到的。
+			提供的地址如果存在dfs.namenode.rpc-bind-host存在就使用这个地址，否则用fs.defaultFS的地址。
+
+		(3)疑问的解答
+		这里疑为什么是使用fs.defaultFS的地址?猜测应该是使用dfs.namenode.servicerpc-address阿！
+		实际上是在NameNode构造函数中调用了initializeGenericKeys，里面有如下代码:
+		if(conf.get(DFS_NAMENODE_RPC_ADDRESS_KEY) != null) {
+			URI defaultUri = URI.create(HdfsConstants.HDFS_URI_SCHEME + "://"
+			        + conf.get(DFS_NAMENODE_RPC_ADDRESS_KEY));
+			conf.set(FS_DEFAULT_NAME_KEY, defaultUri.toString());
+			LOG.debug("Setting " + FS_DEFAULT_NAME_KEY + " to " + defaultUri.toString());
+		}
+		意思是如果存在dfs.namenode.servicerpc-address，就使用它覆盖fs.defaultFS，因此还是使用它。
+		

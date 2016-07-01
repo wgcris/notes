@@ -1,0 +1,23 @@
+﻿
+
+include/linux/sched.h中有关于进程结构体的定义
+其中有如下定义:
+struct nsproxy *nsproxy;
+
+include/linux/nsproxy.h中有关于nsproxy结构体的定义
+struct nsproxy {
+	atomic_t count;
+	struct uts_namespace *uts_ns;
+	struct ipc_namespace *ipc_ns;
+	struct mnt_namespace *mnt_ns;
+	struct pid_namespace *pid_ns_for_children;
+	struct net 	     *net_ns;
+};
+
+
+linux启动，这里汇编跳入的第一行c代码(仍然在进程0中)开始分析
+start_kernel
+	rest_init
+		kernel_thread(kernel_init, NULL, CLONE_FS);			//建立init进程，具体执行为kernel_init函数
+		
+		

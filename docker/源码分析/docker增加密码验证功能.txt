@@ -1,0 +1,36 @@
+﻿下面以增加用户登陆密码验证为目的进行分析,当然仍然以docker run命令的角度进行分析
+应该分为参数的增加和用户登陆的验证两部分分析
+(一) 参数的增加
+从docker的main包开始分析docker，首先需要分析init函数
+init														// docker/client.go
+	clientFlags = &cli.ClientFlags					// 这里实质是init函数外面的全局变量，放在init函数一起说明了
+	client = clientFlags.FlagSet
+	client.StringVar												// 注: 这时候client为flag.FlagSet类型, 因此执行pkg/mflag/flag.go中的StringVar
+		fs.Var(newStringValue(value,p),names,usage)			//实质是将一组flag参数(包括类型，默认值，用法等)记录与fs.formal，这里的fs为全局的clientFlags
+		//综上，上面过程是设置了clientFlags.ConfigDir，然后赋值clientFlags.formal["-config"] = $(DOCKER_CONFIG)
+	clientFlags.PostParse赋值								//赋值一个函数，暂时不分析
+//综上，init函数实质就是给clientFlags赋值的一系列过程。
+
+main														// docker/docker.go
+	flag.Merge										// pkg/mflag/flag.go
+		//注: Merge的三个参数分别为flag.CommandLine, clientFlags.FlagSet, commonFlags.FlagSet
+		//其中flag.CommandLine为NewFlagSet(os.Args[0], ExitOnError),		其中os.Args[0]为"docker"
+		//其中clientFlags.FlagSet和commonFlags分别为ClientFlags.FlagSet和cli包下的CommonFlags
+		//其中在clientFlags.FlagSet中init函数(docker/common.go:init)增加了"D", "-debug","l", "-log-level","-tls","-tlsverify","-tlscacert","-tlscert","-tlskey"配置项目
+		//CommonFlags里面有哪些配置项呢？
+		起始就是将clientFlags.FlagSet和commonFlags加入到同一个FlagSet中,即flag.CommandLine(这是一个名称为docker的flag)
+	flag.Usage										// 为flag.Usage赋值, 用于提供帮助
+	flag.Parse
+		CommandLine.Parse(os.Args[1:])
+			for {
+				parseOne			//分析参数放到actual里面
+			}
+	showVersion
+	设置client.DockerCli对象
+	创建cli对象c，并设置了handlers
+	c.Run
+		cli.command(args[:2]...)
+			CmdRun					// api/client/run.go
+				Cli.Subcmd
+				runconfigopts.Parse(cmd, args)	
+		

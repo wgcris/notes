@@ -1,0 +1,41 @@
+虚拟内存
+VmSize是虚拟内存，在task_mmu.c中有打印/proc/${pid}/status的说明。
+可知具体打印的信息为mm->total_vm, 即mm_struct结构体的total_vm。
+根据打印的提示，可以猜测total_vm的大小为4K，即一个页的大小。
+
+(1) total_vm在何处被设置
+具体设置total_vm如下:
+Exec.c (z:\home\zcy\work\linux\linux-3.10.102\fs):	mm->stack_vm = mm->total_vm = 1;
+Mm.h (z:\home\zcy\work\linux\linux-3.10.102\include\linux):	mm->total_vm += pages;
+Mmap.c (z:\home\zcy\work\linux\linux-3.10.102\mm):	mm->total_vm += pages;
+Mmap.c (z:\home\zcy\work\linux\linux-3.10.102\mm):	mm->total_vm += len >> PAGE_SHIFT;
+Mmap.c (z:\home\zcy\work\linux\linux-3.10.102\mm):	mm->total_vm += len >> PAGE_SHIFT;
+Nommu.c (z:\home\zcy\work\linux\linux-3.10.102\mm):	current->mm->total_vm += len >> PAGE_SHIFT;
+Nommu.c (z:\home\zcy\work\linux\linux-3.10.102\mm):	mm->total_vm = 0;
+Task_mmu.c (z:\home\zcy\work\linux\linux-3.10.102\fs\proc):		total_vm << (PAGE_SHIFT-10),
+
+(2) total_vm的调用
+(2.1) exec.c中的调用
+do_execve
+	do_execve_common
+		bprm_mm_init	
+			__bprm_mm_init	
+				mm->total_vm = 1
+很明sys_execve系统调用的时候调用这个过程。猜测是设置这个进程的页全局目录地址。
+
+(2.2) Mm.h Mmap.c中的调用
+mmap暂时不考虑
+
+(2.3) 
+load_elf_library
+	elf_phdata = kmalloc(j, GFP_KERNEL)
+		
+	eppnt = elf_phdata
+	bss = eppnt->p_memsz + eppnt->p_vaddr
+		len = ELF_PAGESTART(eppnt->p_filesz + eppnt->p_vaddr + ELF_MIN_ALIGN - 1);
+	vm_brk(len, bss - len)
+		
+
+install_special_mapping
+
+

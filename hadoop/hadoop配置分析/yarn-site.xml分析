@@ -1,0 +1,150 @@
+(1) yarn.acl.enable
+<name>yarn.acl.enable</name>
+<value>true</value>
+说明: 是否开启yarn的acl功能。
+(2) yarn.admin.acl
+<name>yarn.admin.acl</name>
+<value>*</value>
+说明: yarn的管理员列表
+(3) yarn.log-aggregation-enable
+        <name>yarn.log-aggregation-enable</name>
+        <value>true</value>
+说明: 是否开启日志聚集功能。
+日志聚集是YARN提供的日志中央化管理功能，它能将运行完成的Container/任务日志上传到HDFS上，从而减轻NodeManager负载，且提供一个中央化存储和分析机制。
+(4) yarn.log-aggregation.retain-seconds
+<name>yarn.log-aggregation.retain-seconds</name>
+<value>864000</value>
+说明: 日志聚集在HDFS上最大的存储时间。
+(5) yarn.log-aggregation.retain-check-interval-seconds
+<name>yarn.log-aggregation.retain-check-interval-seconds</name>
+<value>86400</value>
+说明: 多长时间检查一次日志，并将满足条件的删除，如果是0或者负数，则为上一个值的1/10。
+(6) yarn.nodemanager.remote-app-log-dir
+参数解释：当应用程序运行结束后，日志被转移到的HDFS目录（启用日志聚集功能时有效）。
+默认值：/tmp/logs
+(7) yarn.resourcemanager.address
+<name>yarn.resourcemanager.address</name>
+<value>BJHC-Client-9175.hadoop.jd.local:8032</value>
+说明: 对客户端的地址端口,默认为${yarn.resourcemanager.hostname}:8032
+(8) yarn.resourcemanager.scheduler.address
+<name>yarn.resourcemanager.scheduler.address</name>
+<value>BJHC-Client-9175.hadoop.jd.local:8030</value>
+说明: 对AM的地址端口
+(9) yarn.resourcemanager.resource-tracker.address
+<name>yarn.resourcemanager.resource-tracker.address</name>
+<value>BJHC-Client-9175.hadoop.jd.local:8031</value>
+说明: 对NM的地址端口
+(10) yarn.resourcemanager.admin.address
+<name>yarn.resourcemanager.admin.address</name>
+<value>BJHC-Client-9175.hadoop.jd.local:8033</value>
+说明: 对管理员的地址端口
+(11) yarn.resourcemanager.webapp.address
+<name>yarn.resourcemanager.webapp.address</name>
+<value>BJHC-Client-9175.hadoop.jd.local:50320</value>
+说明: yarn通过http访问yarn的管理界面的地址端口
+(12) yarn.nodemanager.local-dirs
+<name>yarn.nodemanager.local-dirs</name>
+<value>/data0/yarn/local,/data1/yarn/local,/data2/yarn/local,/data3/yarn/local,/data4/yarn/local,/data5/yarn/local,/data6/yarn/local,/data7/yarn/local,/data8/yarn/local,/data9/yarn/local,/data10/yarn/local,/data11/yarn/local</value>
+说明: 用于存放yarn产生的中间结果的一些目录，譬如脚本，token等。
+(13) yarn.nodemanager.log-dirs
+<name>yarn.nodemanager.log-dirs</name>
+<value>/data0/yarn/logs</value>
+说明: 用于存放yarn产生的日志文件。?????开启了日志聚集功能后是否依然有用。
+(14) yarn.resourcemanager.scheduler.class
+<name>yarn.resourcemanager.scheduler.class</name>
+<value>org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairScheduler</value>
+说明: 设置调度器的类。
+(15) yarn.scheduler.fair.allocation.file
+<name>yarn.scheduler.fair.allocation.file</name>
+<value>/software/servers/hadoop-2.2.0/etc/hadoop/fair-scheduler.xml</value>
+说明: 定义fair调度器属性的文件，主要定义了各个队列的属性,比如资源量、权重等。
+?????关于配置文件的分析?????
+(16) yarn.scheduler.fair.assignmultiple
+<name>yarn.scheduler.fair.assignmultiple</name>
+<value>true</value>
+说明: 是否允许多个容器分配一个心跳?????
+(17) yarn.scheduler.fair.allow-undeclared-pools
+<name>yarn.scheduler.fair.allow-undeclared-pools</name>
+<value>false</value>
+说明: 是否允许创建未定义的资源池。
+如果设置成true，yarn将会自动创建任务中指定的未定义过的资源池。设置成false之后，任务中指定的未定义的资源池将无效，该任务会被分配到default资源池中。       
+(17) yarn.scheduler.fair.locality.threshold.node
+<name>yarn.scheduler.fair.locality.threshold.node</name>
+<value>1</value>
+说明: 当应用程序请求某个节点上资源时，它可以接受的可跳过的最大资源调度机会。当按照分配策略，可将一个节点上的资源分配给某个应用程序时，如果该节点不是应用程序期望的节点，可选择跳过该分配机会暂时将资源分配给其他应用程序，直到出现满足该应用程序需的节点资源出现。通常而言，一次心跳代表一次调度机会，而该参数则表示跳过调度机会占节点总数的比例，默认情况下，该值为-1.0，表示不跳过任何调度机会。
+?????为什么跳过,或者怎么跳过?????
+(18) yarn.scheduler.fair.locality.threshold.rack
+<name>yarn.scheduler.fair.locality.threshold.rack</name>
+<value>1</value>
+说明: 当应用程序请求某个机架上资源时，它可以接受的可跳过的最大资源调度机会。
+(19) yarn.scheduler.minimum-allocation-mb
+<name>yarn.scheduler.minimum-allocation-mb</name>
+<value>2560</value>
+说明: 单个任务可申请的最少物理内存量，默认是1024（MB），如果一个任务申请的物理内存量少于该值，则该对应的值改为这个数。
+(20) yarn.scheduler.maximum-allocation-mb
+<name>yarn.scheduler.maximum-allocation-mb</name>
+<value>28672</value>
+说明:单个任务可申请的最多物理内存量，默认是8192（MB）。
+(21) yarn.nodemanager.resource.memory-mb
+        <name>yarn.nodemanager.resource.memory-mb</name>
+        <value>57344</value>		
+说明:默认的物理内存总量（单位）
+(22) yarn.nodemanager.vmem-pmem-ratio
+        <name>yarn.nodemanager.vmem-pmem-ratio</name>
+        <value>3.1</value>			
+说明:每使用1M，做多可使用3.1M的虚拟内存。
+(23) yarn.nodemanager.pmem-check-enabled
+        <name>yarn.nodemanager.pmem-check-enabled</name>
+        <value>true</value>			
+说明:可以分配的虚拟CPU个数。(虚拟CPU?????)
+(24) yarn.nodemanager.vmem-check-enabled
+        <name>yarn.nodemanager.vmem-check-enabled</name>
+        <value>false</value>
+说明:是否启动一个线程检查每个任务正使用的虚拟内存量，如果任务超出分配值，则直接将其杀掉，默认是true。
+(25) yarn.nodemanager.resource.cpu-vcores
+        <name>yarn.nodemanager.resource.cpu-vcores</name>
+        <value>28</value>
+说明:表示该节点上YARN可使用的虚拟CPU个数，目前推荐将该值设值为与物理CPU核数数目相同。
+(26) yarn.scheduler.minimum-allocation-vcores
+        <name>yarn.scheduler.minimum-allocation-vcores</name>
+        <value>1</value>
+说明:单个任务最小申请的cpu核心数目。
+(27) yarn.scheduler.maximum-allocation-vcores
+        <name>yarn.scheduler.maximum-allocation-vcores</name>
+        <value>28</value>
+说明:单个任务最大申请的cpu核心数目。
+(28) yarn.nodemanager.log.retain-seconds
+        <name>yarn.nodemanager.log.retain-seconds</name>
+        <value>86400</value>
+说明:NodeManager上日志的保存时间。
+(29) yarn.nodemanager.remote-app-log-dir和yarn.nodemanager.remote-app-log-dir-suffix
+        <name>yarn.nodemanager.remote-app-log-dir</name>
+        <value>/tmp/app-logs</value>
+
+        <name>yarn.nodemanager.remote-app-log-dir-suffix</name>
+        <value>logs</value>
+说明:应用程序运行结束后，日志组转移到HDFS的目录。
+目录位置为:${yarn.nodemanager.remote-app-log-dir}/${user}/${yarn.nodemanager.remote-app-log-dir-suffix}/${application_id}
+(30) yarn.nodemanager.aux-services
+        <name>yarn.nodemanager.aux-services</name>
+        <value>mapreduce_shuffle</value>
+说明:nodemanager配置的附属服务。只有这样配置mapreduce_shuffle，才能运行mapreduce程序。
+(31) yarn.nodemanager.delete.debug-delay-sec
+        <name>yarn.nodemanager.delete.debug-delay-sec</name>
+        <value>3600</value>
+说明:一个APP结束之后一般会删除本地文件目录和日志目录，这个时间是表示删除这些操作的延时时间。
+(32) yarn.resourcemanager.nodes.include-path和yarn.resourcemanager.nodes.exclude-path
+        <name>yarn.resourcemanager.nodes.include-path</name>
+        <value>/software/servers/hadoop-2.2.0/etc/hadoop/hosts/mapred_hosts</value>
+        <name>yarn.resourcemanager.nodes.exclude-path</name>
+        <value>/software/servers/hadoop-2.2.0/etc/hadoop/hosts/exclude_mapred_hosts</value>
+说明:表示与RM通信的NM的白名单列表和黑名单列表
+(33) yarn.application.classpath
+        <name>yarn.application.classpath</name>
+        <value>$HADOOP_CONF_DIR,$HADOOP_COMMON_HOME/share/hadoop/common/*,$HADOOP_COMMON_HOME/share/hadoop/common/lib/*,$HADOOP_HDFS_HOME/share/hadoop/hdfs/*,$HADOOP_HDFS_HOME/share/hadoop/hdfs/lib/*,$HADOOP_YARN_HOME/share/hadoop/yarn/*,$HADOOP_YARN_HOME/share/hadoop/yarn/lib/*</value>
+说明: yarn程序的classpath
+(34) yarn.nodemanager.address
+      <name>yarn.nodemanager.address</name>
+      <value>${yarn.nodemanager.hostname}:50086</value>
+说明: nodemanager的容器管理器的server地址和端口。这个配置文件没有配置yarn.nodemanager.hostname，默认使用0.0.0.0:0。
+其中，0.0.0.0代表本机上的所有ip，使用本机支持的任意ip都可以访问该服务器。

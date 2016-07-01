@@ -1,0 +1,88 @@
+(1) MAPREDUCE-6549
+LineRecordReader中，多字节的分隔符可能会产生重复的记录。
+(待详细分析!!!!!)
+
+(2) MAPREDUCE-6540
+TestMRTimelineEventHandling单元测试错误
+
+(3) MAPREDUCE-6528
+HistoryFileManager.getJobSummary的内存泄露。readUTF抛出异常，没有正常关闭流。
+
+(4) MAPREDUCE-6518
+ShuffleHandler中没有设置SO_KEEPALIVE，导致socket卡在ESTABLISHED状态。(netty框架相关，待深入!!!!!)
+
+(5) MAPREDUCE-6497
+JobHistoryEventHandler中响应timeline server时候，传入map counters的时候使用错误的参数。
+
+(6) MAPREDUCE-6492
+触发DeallocateContainerTransition事件的时候，调用sendJHStartEventForAssignedFailTask，会触发空指针异常。
+
+(7) MAPREDUCE-6481
+LineRecordReader可能得到错误的record和key信息对于为压缩的输入。
+(待详细分析!!!!! 同MAPREDUCE-6549一起)
+
+(8) MAPREDUCE-6474
+ShuffleHandler可能用尽所有的文件描述符
+(待详细分析!!!!!)
+
+(9) MAPREDUCE-6472
+为AM增加配置java临时目录功能。
+
+(10) MAPREDUCE-6454
+在distributed-cache中，把HADOOP_CLASSPATH增加到环境变量中。
+(distributed-cache的流程要看看!!!!!)
+
+(11) MAPREDUCE-6451
+distcp的时候没有更新chunkFilePath和其他变量。
+会出现一个拷贝成功，但是多个job都成功但是没有重新拷贝。(?????)
+
+(12) MAPREDUCE-6442
+修改打印信息,把整个错误信息栈都打印出来，而不是仅仅打印错误信息。
+
+(13) MAPREDUCE-6439
+AM可能失败而不是重试，当RM关闭的时候。
+
+(14) MAPREDUCE-6426
+单元测试问题
+
+(15) MAPREDUCE-6425
+传递错误的参数
+
+(16) MAPREDUCE-6377
+在JHS的web页面中，增加按照处于工作的排序。
+
+(17) MAPREDUCE-6273
+HistoryFileManager缺少检查文件的操作
+
+(18) MAPREDUCE-5982
+一个task如果失败于ASSIGNED状态，他可能会从job历史中消失。
+
+(19) MAPREDUCE-5948
+LineRecordReader在处理多字节自定义分隔符的功能不好。(与MAPREDUCE-6549一起分析?????)
+
+(20) MAPREDUCE-5883
+MB_MILLIS_MAPS.name和MB_MILLIS_REDUCES.name"注释"写错
+
+(21) MAPREDUCE-5649
+在最后merge过程，reduce不能用超过2G的内存。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

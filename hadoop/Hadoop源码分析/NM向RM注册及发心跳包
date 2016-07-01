@@ -1,0 +1,84 @@
+NM启动后会想RM发送注册请求，然后会不断发送心跳包，证明NM可以正常使用。
+RM作为服务端，通过ResourceTrackerService提供服务。
+NM作为客户端，通过NodeStatusUpdater提供请求
+(1) NodeManager端的请求程序
+NodeManager
+	serviceInit
+		nodeStatusUpdater = createNodeStatusUpdater(context, dispatcher, nodeHealthChecker);
+			//context为NodeManager的上下文。下面只关心有用的部分，(1)getNodeId 在ContainerManagerImpl::serviceStart生成了NodeId(这里放到ContainerManagerImpl生成NodeId的原因是?????)		(2)getHttpPort暂时不考虑
+			//dispacter为NodeManager的异步调度器(AsyncDispatcher)，用于响应注册的事件(NodeManager的AsyncDispatcher用于处理ContainerManagerEventType和NodeManagerEventType)，并作为服务添加到NodeManager。
+			//nodeHealthChecker为检查健康的服务(怎么检查?????)，添加到NodeManager中。
+
+nodeStatusUpdaterImpl作为服务需要关注其serviceInit方法和serviceStart方法
+	serviceInit
+		接下来是一些配置
+		...
+		以下三个配置项用于计算nodemanager分配的内存,虚拟内存,cpu虚拟核心数
+		yarn.nodemanager.resource.memory-mb
+		yarn.nodemanager.vmem-pmem-ratio
+		yarn.nodemanager.resource.cpu-vcores
+		tokenKeepAliveEnabled
+		yarn.nm.liveness-monitor.expiry-interval-ms    tokenRemovalDelayMs
+		yarn.nodemanager.duration-to-track-stopped-containers				//检查nodemanager健康的周期，默认10min
+		...		
+
+	serviceStart
+		获取nodeId和httpPort
+		创建一个与RM的ResourceTrackerService通信的代理对象resourceTracker。		//这里会根据配置找到RM的地址端口，从而构造IPC请求
+		registerWithRM
+			构造注册请求
+			resourceTracker.registerNodeManager(request);		//通过代理resourceTracker向RM发送注册请求，并返回响应。		?????具体的注册过程待分析?????
+			检查返回的相应的Action是否为NodeAction.SHUTDOWN，是就抛出异常退出。
+			处理服务器发来的token		
+	startStatusUpdater			
+		定义了一个Runnable对象statusUpdaterRunnable，并开启使用该对象开启线程statusUpdater。它是用来?????补全?????。需要关注起run方法
+			startStatusUpdater::run
+				getNodeStatusAndUpdateContainersInContext			//获取节点状态nodeStatus					?????具体怎么获取的节点状态待分析?????
+				构造请求request
+				resourceTracker.nodeHeartbeat(request)				//使用远程代理发送心跳包
+				response.getNextHeartBeatInterval							//从得到的响应中获取下一次心跳包的时间间隔
+				updateMasterKeys															//更新服务器发来的token
+				判断NodeAction是否是SHUTDOWN，如果是跑出异常退出。
+				判断NodeAction是否是updateMasterKeys，如果是进行一些操作。				//具体为RESYNC的操作是什么意思?????
+				得到要清除的container和app列表，病清除container
+				
+(2) ResourceManger的服务说明
+ResourceManger
+	ResourceManger::serviceInit分配了resourceTracker(ResourceTrackerService类)，并添加到ResouceManager待后续开启。
+	因此需要关注一下ResourceTrackerService的serviceInit和serviceStart方法
+	ResourceTrackerService::serviceInit
+		进行一些初始化设置，如下:
+		yarn.resourcemanager.resource-tracker.address							//resourceTrackerAddress
+		yarn.resourcemanager.nodemanagers.heartbeat-interval-ms		//nextHeartBeatInterval
+		yarn.resourcemanager.scheduler.minimum-allocation-mb			//minAllocMb
+		yarn.resourcemanager.scheduler.minimum-allocation-vcores	//minAllocVcores
+
+	ResourceTrackerService::serviceStart
+		rpc.getServer			//使用YarnRPC构造一个服务server，以供NodeManager中的代理(即resourceTracker)访问
+			//其中rpc具体实现有配置决定，默认为org.apache.hadoop.yarn.ipc.HadoopYarnProtoRPC
+			//参数protocol: ResourceTracker.class。  instance: this(即ResourceTrackerService)。  addr: yarn.resourcemanager.resource-tracker.address指定(对NM的端口)。 numHandlers: 由yarn.resourcemanager.resource-tracker.client.thread-count指定。为NM提供服务的线程池大小。
+			HadoopYarnProtoRPC::getServer
+				实质通过工厂类创建server，具体的工厂类由配置指定。默认为org.apache.hadoop.yarn.factories.impl.pb.RpcServerFactoryPBImpl
+				RpcServerFactoryPBImpl::getServer
+					构造一些实例
+					createServer
+						RPC::build
+							RPC::getProtocolEngine					//rpc.engine.HadoopYarnProtoRPC可以配置HadoopYarnProtoRPC的engine，没有配置默认使用WritableRpcEngine类
+							上一步构造的engine.getServer				//WritableRpcEngine.getServer仅仅构造一个Server对象
+		开启server
+
+上述具体不是很重要，仅仅知道instance(即ResourceTrackerService实例)被注册到服务中即可。
+关注其两个方法registerNodeManager和nodeHeartbeat
+
+ResourceTrackerService::registerNodeManager			//由NM经过RPC调用来实现，对应于NM的registerNodeManager分析
+	
+
+
+
+
+
+
+
+
+	
+

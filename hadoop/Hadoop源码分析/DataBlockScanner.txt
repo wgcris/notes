@@ -1,0 +1,105 @@
+﻿一 块扫描器DataBlockScanner的说明
+(1) DataBlockScanner对象的创建
+	DataNode.initDataBlockScanner有如下代码
+		blockScanner = new DataBlockScanner(this, data, conf)	
+		blockScanner.start
+			创建blockScannerThread对象，并设置为守护线程
+			blockScannerThread.start
+	综上: 可以知道DataBlockScanner会执行一个DataBlockScanner相关的线程，接下来的就是分析DataBlockScanner.run方法
+
+(2) 扫描的工作
+	DataBlockScanner.run
+		改函数通过getNextBPScanner不断的获取blockPoolScannerMap中lastScanTime最小的scanner，如果没有获取下一个Key值的scanner，如果仍然没有获取第一个scanner。
+		然后获取这个scanner的id，如果不是alive状态就并contine掠过当前的循环。
+		否则执行scanBlockPoolSlice，首先会判断是否达到扫描时间，然后执行scan执行扫描。
+		具体的扫描首先设置相关的时间，判断超时。然后调用verifyFirstBlock(因为blockInfoSet是一个SortedSet，所以只调用一次就可以)，继而调用verifyBlock。
+		verifyBlock具体构造blockSender并调用sendBlock方法将数据块的元数据和数据等信息写入到空流中。这个过程中如果捕获到异常，说明数据库校验又误，否则正常，然后更新状态。
+		
+(3) 相关类说明
+DataBlockScanner:	是一个块扫描器的管理器，每个DataNode对应一个DataBlockScanner(即blockPoolManager)。会管理一组BlockPoolSliceScanner
+BlockPoolSliceScanner: 是具体的扫描器，里面要包含要扫描的块，对应于BPOfferService，因此表示一个命名空间的扫描器。
+BlockPoolManager:	 管理DataNode上的BPOfferService。
+BPOfferService：		对应于某一个block pool服务,一个BlockPoolManager会管理多个BPOfferService，每个对应设置的nameServices。
+BPServiceActor：		BPOfferService下的，记录于bpServices,对应于nameservices的NM的RPC服务地址配置对象。功能如下:
+	1.预先与NameNode进行握手
+	2.向NameNode注册
+	3.周期性的向NameNode发送心跳
+	4.处理NameNode发送回的命令
+	
+(4) scanner和块注册流程简要说明
+	在NameNode启动的时候会根据配置一组BPOfferService(blockPoolManager.refreshNamenodes中实现),分别对应于不同的命名空间。
+	这组BPOfferService会根据配置的NN的数目创建指定个数的BPServiceActor，主要用于于NN交互。
+	BPServiceActor启动的时候连接NN(通过connectToNNAndHandshake方法),正常链接NN后方可机型后续的工作。
+	之后会将BPServiceActor对象的blockpool加入到DataNode的blockPoolManager中。(verifyAndSetNamespaceInfo->initBlockPool->addBlockPool)
+	然后将BPServiceActor对象的blockpool构造的BlockPoolSliceScanner对象加入到blockScanner中(offerService->addBlockPool)
+	BlockPoolSliceScanner对象的构造函数会将一个名称空间下的所有块注册到该扫描器中。
+	
+	
+	
+
+							附录 (待整理和进一步细化，仅仅作备份):
+附录A 扫描器的流程
+DataBlockScanner:run
+	假如datanode::shouldRun为true(表示datanode正常开启)且线程尚未中断，进入下面循环
+	{
+		如果不是第一次运行，就休眠5s ?????
+		getNextBPScanner						//获取BlockPoolSliceScanner对象bpScanner
+			遍历blockPoolScannerMap获取当前的项目的lastScanTime。并获取所有项目中的最小值赋值给lastScanTime，并记录此时id值nextBpId
+			这里做一个判断，如果nextBpId为null, 则设置nextBpId为currentBpId的上一个Key值。如果nextBpId为空，则设置nextBpId为第一个Key值。
+			getBPScanner(nextBpId)		//获取blockPoolScannerMap中的指定项目
+		getBlockPoolId							//获取currentBpId
+		假如datanode的BPService没有激活，将currentBpId从Block池中移除
+		scanBlockPoolSlice					//扫描BP
+			workRemainingInCurrentPeriod				//判断是否达到扫描时间或该次扫描是否完成
+			assignInitialVerificationTimes			// ???
+			scan
+				判断只有datanode运行的时候，并且blockScannerThread线程未中断，datanode的BPService仍然alive
+				设置实际时间相关，设置新的采集周期，
+				判断是否已经超时，超时执行
+					verifyFirstBlock								//blockInfoSet是一个SortedSet，且以最后一次扫描时间排序
+						verifyBlock										//允许两次重试以确保稳定
+							创建一个BlockSender对象，写到数据流NullOutputStream中
+							blockSender.sendBlock				//实际上是用于读块和元数据并转化为流的函数,这里读入到null中，仅仅为了在这一过程检查校验位是否正确
+								sendPacket								//如果捕获异常，表示数据校验失败或IOExcetpion，表示块损坏
+									构造包
+									verifyChecksum					//校验数据，是检查块损坏的方法
+									发送
+							使用updateScanStatus(异常也是使用该函数，只是使用的参数不同)保存状态
+						processedBlocks.put						//将处理过的block加入到processedBlocks中		
+	}
+	将blockPoolScannerMap中所有的项目关闭			//线程结束执行，暂时不分析
+
+附录B DataBlockScanner的由来
+DataNode
+	#v#blockPoolManager			//变量，BlockPoolManager类型，用于管理一组BPOfferService(每一个BPOfferService服务一个NameService)
+	startDataNode 
+	  blockPoolManager = new BlockPoolManager(this);
+    blockPoolManager.refreshNamenodes(conf);
+			根据解析nameservices创建对应的BPOfferService对象并添加到offerServices中
+						startAll																			  //然后开启服务
+							将offerService存储的每一项BPOfferService启动			
+								会启动内部的bpServices每一个BPServiceActor			//BPOfferService会启动一个自己命名空间的BPServiceActor用于与NN通信，这组BPServiceActor记录于bpServices中，之所以不是一个是为了HA情况下对应不同NN
+																													 //BPOfferService管理着一组与起同一个命名空间的BPServiceActor
+BPServiceActor
+	启动BPServiceActor服务会执行run方法
+	run
+		connectToNNAndHandshake					//连接握手的时候
+			dn.connectToNN								//连接NN，可能捕获异常退出，造成无法进行下面的工作。因此，也仅仅是将正常连接NN的那个命名空间对应的bp加入到bp管理器中。避免不必要的工作。
+					blockPoolManager.addBlockPool(bpos);				//添加blockpool加入到bp管理器中
+					initPeriodicScanners
+						initPeriodicScanners
+							这里构造了DataBlockScanner
+		offerService									//这里目前仅仅分析scanner服务
+			...
+			dn.blockScanner.addBlockPool(bpos.getBlockPoolId());				//bops为BPServiceActor对应的BPOfferService，即对应一个名称空间
+				//这里将blockpoll加入到了最终扫描器(这里会根据id构造一个BlockPoolSliceScanner对象)的管理器DataBlockScanner中(具体实现为添加到类型为BlockPoolSliceScanner的一组map中，即blockPoolScannerMap)等待接下来扫描
+			...
+	
+BlockPoolSliceScanner中的扫描块的由来
+	BlockPoolSliceScanner的构造函数
+		List<Block> arr = dataset.getFinalizedBlocks(blockPoolId);		//从dataset中找到对应的命名空间的blockpool的id, 然后读出它的所有块
+		this.addBlockInfo				//将上面读入的块加入到BlockPoolSliceScanner中待扫描
+		
+		
+		
+    

@@ -1,0 +1,140 @@
+Yarn HA
+(1) 从启动AdminService说起。
+AdminService有个组件embeddedElector(EmbeddedElectorService类)，会作为服务启动。
+EmbeddedElectorService::serviceInit
+	获取zkQuorum								//设置为ZK节点的访问地址。譬如: 172.22.96.70:2181,172.22.96.72:2181,172.22.96.74:2181
+	获取rmid,clusterId
+	createActiveNodeInfo			//?????
+	获取	zkBasePath						//yarn.resourcemanager.ha.automatic-failover.zk-base-path的值。譬如: /yarn-test/yarn-leader-election
+	获取electionZNode					//${zkBasePath}/${clusterid}
+	获取zkSessionTimeout				//yarn.resourcemanager.zk-timeout-ms的值，默认10000。
+	获取zkAcls									//yarn.resourcemanager.zk-acl，默认world:anyone:rwcda。咱不考虑权限列表。
+	获取zkAuths								//yarn.resourcemanager.zk-auth,这里没配置，无默认值，为空。
+	构造ActiveStandbyElector对象elector					//构造函数通过connect构造zkClient
+	ensureParentZNode					//确保要使用znode的父节点存在，不存在就创建。
+	isParentZnodeSafe					//检查节点是否安全，通过是否存在子节点，集群id等方法确定
+EmbeddedElectorService::serviceStart
+	elector.joinElection			//传入了localActiveNodeInfo
+		arraycopy								//讲传入参数拷贝到appData
+		joinElectionInternal
+			createLockNodeAsync		//创建ZNode节点，为${zkBasePath}/${clusterid}/ActiveStandbyElectorLock
+
+(2) RMActiveServices
+ResourceManager有组件activeServices(RMActiveServices类)
+
+
+一 RM端关于自动切换的说明
+ZooKeeper路径
+(1) zkLockFilePath
+RM开启服务之后在zookeeper建立的锁的路径为ActiveStandbyElector.zkLockFilePath，具体为:
+${yarn.resourcemanager.ha.automatic-failover.zk-base-path}/${yarn.resourcemanager.cluster-id}/ActiveStandbyElectorLock
+这里配置为/yarn-test/yarn-leader-election/yarn-test/ActiveStandbyElectorLock
+(2) zkBreadCrumbPath
+${yarn.resourcemanager.ha.automatic-failover.zk-base-path}/${yarn.resourcemanager.cluster-id}/ActiveBreadCrumb
+这里配置为/yarn-test/yarn-leader-election/yarn-test/ActiveBreadCrumb
+ActiveBreadCrumb节点的存在意味着在意味着在自动恢复的过程中需要FENCED
+
+从RM启动的角度分析
+ResourceManager::serviceStart
+	如果是HA，先初始化为standy
+		
+
+AdminService
+	AdminService::serviceInit
+		如果启动了HA
+			根据配置判断是否开启了自动切换功能autoFailoverEnabled(这里配置为开启)
+			判断是否开启嵌入的自动故障切换器。(当前仅仅支持嵌入的方式)
+			构造EmbeddedElectorService服务，并加入到AdminService中
+			...
+			获取rmid
+				
+	AdminService::serviceStart
+		AdminService::startServer
+			...
+			如果开启了HA
+					?????
+			...
+
+EmbeddedElectorService服务被假如到AdminService中，也会调用init和start函数
+EmbeddedElectorService::serviceInit
+	获取zkQuorum,为"yarn.resourcemanager.zk-address"的值，是一组ip地址:端口
+	获取rm的id，cluster的id。
+	createActiveNodeInfo创建Active节点的节点信息，会将cluterid和rmid序列化为一组字节，即localActiveNodeInfo
+	获取zk的跟路径zkBasePath,通过yarn.resourcemanager.ha.automatic-failover.zk-base-path获取。
+	获取zk的竞选路径electionZNode，zkBasePath + "/" + clusterId
+	获取zkSessionTimeout，通过yarn.resourcemanager.zk-timeout-ms设置，这里使用默认值10000ms
+	获取zkAcls,暂时略
+	获取最大的重复次数，通过ha.failover-controller.active-standby-elector.zk.op.retries，这里使用默认值3
+	构造选择器elector
+	elector.ensureParentZNode			//确保父节点存在，创建父节点为持久性
+	isParentZnodeSafe							//在zk上检查节点信息(zkLockFilePath),判断该节点是否安全可以被使用
+	
+EmbeddedElectorService::serviceStart	
+	把要序列化的数据写入到appData中	
+	joinElectionInternal		
+		createLockNodeAsync
+			创建zkLockFilePath节点，注意这里把this(ActiveStandbyElector，它实现了StringCallback)作为参数传入，异步的create，因此还将会调用processResult(int rc, String path, Object ctx, String name)方法
+				processResult
+					判断返回码，如果创建成功调用becomeActive,然后调用monitorActiveStatus
+						becomeActive
+							如果当前RM已经是ACTIVE状态，直接返回即可
+							fenceOldActive
+								zkClient.getData获取zkBreadCrumbPath的数据。
+								如果获取的数据与当前节点相同，就返回。
+								如果获取的数据与当前节点不相同，执行appClient.fenceOldActive
+									由于appClient由子类传入，这里fenceOldActive为EmbeddedElectorService.fenceOldActive,但是2.7.2版本并没有实现FENCED。
+							writeBreadCrumbNode
+								创建zkBreadCrumbPath节点
+							appClient.becomeActive
+								EmbeddedElectorService.becomeActive
+									AdminService.transitionToActive
+										...
+										ResourceManager.transitionToActive
+											startActiveServices
+											reinitialize
+							将自己的状态标记为ACTIVE
+						monitorActiveStatus				//使用exists设置回调和watcher,监控节点发生变化，随时准备切换为Active
+							monitorLockNodeAsync
+								zkClient.exists				//这里异步接口是this,因此会调用。因此还将会调用processResult(最后一个参数是stat),并注册了一个watcher，当节点被删除或创建的时候调用一次(后面分析，这才是监控的关键)。
+									processResult				//这个是调用exists的处理函数
+										如果返回成功(返回Code.OK表示存在)，并且当前会话拥有该临时节点，就调用becomeActive(重复之前了，略)。如果当前的会话不拥有会话id，调用becomeStandby。	
+										如果节点不存在(返回Code.NONODE表示不存在)
+											joinElectionInternal				//之前分析过，就是创建节点操作。
+										重试，打印错误等
+					判断返回码，如果ZNode节点已经存在，就调用becomeStandby和monitorActiveStatus
+						becomeStandby
+							直接置状态为STANDBY
+							会调用EmbeddedElectorService.becomeStandby
+								会调用AdminService.transitionToStandby
+									...
+									ResourceManager.transitionToStandby
+										stopActiveServices
+										reinitialize
+										设置状态
+						monitorActiveStatus			//同上
+				... 			//一些重试，返回错误的工作						
+						
+
+exists过程中注册的watcher，这是监控的关键，为WatcherWithClientRef类型。
+WatcherWithClientRef::process
+	会调用ActiveStandbyElector.processWatchEvent
+		...首先处理一些连接，超时等时间，这不是重点关心的。
+		然后处理事件，如果是NodeDeleted事件(意味着原Active出问题了)，调用joinElectionInternal假如选举过程(即尝试创建节点)。如果是NodeDataChanged或其他时间，调用monitorActiveStatus继续监控状态。
+
+二 NM端关于自动切换的说明
+NM唯一的问题及时知道那个RM是ACTIVE即可。
+NodeStatusUpdaterImpl,YarnClientImpl,RMAdminCLI,AMRMClientImpl等类都会间接地调用createRMProxy对象来连接RM。
+以NodeStatusUpdaterImpl分析。
+NodeStatusUpdaterImpl.resourceTracker是NM中与RM通信的组件，通过registerNodeManager，nodeHeartbeat方法向RM注册和发送心跳包。
+如下分析的构造resourceTracker:
+NodeStatusUpdaterImpl::getRMClient
+	ServerRMProxy::createRMProxy
+		RMProxy::createRMProxy
+			createRetryPolicy
+			假如HA开启
+				RMProxy::createRMFailoverProxyProvider
+					使用yarn.client.failover-proxy-provider指定的类构造对象。如果配置不存在，使用ConfiguredRMFailoverProxyProvider。(这里使用默认值)
+					将构造的ConfiguredRMFailoverProxyProvide对象初始化后返回。
+					RetryProxy.create
+					...											?????没看懂,目前仅仅知道是从配置中获取两个RM，一次获取即可。
+

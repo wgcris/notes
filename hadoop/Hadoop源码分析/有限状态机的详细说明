@@ -1,0 +1,62 @@
+本文以YARN-4209说的2.7.1中失败的案例，详细讲解hadoop的有限状态机。
+问题是FENCED没有生效。
+原本的设计思维是: RMStateStore进入一次transition操作的时候，如果捕获到异常，就调用notifyStoreOperationFailed方法设置FENCED状态。
+而2.7.1实际的情况是外部调用状态机后，内部继续调用了状态机，尽管内部状态机设置为FENCED，但外部状态机仍然设置为ACTIVE
+
+有限状态机的说明:
+为了详细说明问题，以2.7.1的代码详细分析一下状态机和YARN-4209失败的原因。
+(a) stateMachine组件
+RMStateStore有组件stateMachine, 类型为StateMachine<RMStateStoreState,RMStateStoreEventType,RMStateStoreEvent>
+	(a.1) stateMachine的构造
+		stateMachine的构造的方法如下:
+		stateMachine = stateMachineFactory.make(this)
+		其中,stateMachineFactory是一个状态机工厂。
+		(a.1.1) stateMachineFactory的构造
+			stateMachineFactory = new StateMachineFactory<RMStateStore,RMStateStoreState,RMStateStoreEventType,RMStateStoreEvent>(RMStateStoreState.ACTIVE).addTransition(...).addTransition(...)...
+		首先构造一个StateMachineFactory对象，设置初始化状态为RMStateStoreState.ACTIVE。然后不断地调用addTransition方法。
+		由多个addTransition方法，这里仅仅介绍用到的三个，其他类似不再说明。
+			(a.1.1.1) addTransition(STATE preState, STATE postState,EVENTTYPE eventType,SingleArcTransition<OPERAND, EVENT> hook)
+				这个方法基于之前的状态机工厂又构造了一个状态机工厂，新状态机不断地增加ApplicableTransition。其实，就是相当于在状态机中transitionsListNode不断增加ApplicableSingleOrMultipleTransition节点。
+			(a.1.1.2) addTransition(STATE preState, STATE postState, EVENTTYPE eventType)
+				与上面相同，仅仅hook设置为null。
+			(a.1.1.3) addTransition(STATE preState, STATE postState, Set<EVENTTYPE> eventTypes)
+				不断的调用addTransition上面哪个函数，调用的个数为set的个数。	
+	(a.2)	stateMachine的生成
+		stateMachine = stateMachineFactory.make(this)
+			构造一个InternalStateMachine对象并返回。传入的第一个参数是this(表示这个RMStateStore)，第二个参数是defaultInitialState(已设置为ACTIVE)
+				InternalStateMachine构造函数
+					构造函数内部首先设置了operand和currrentState。
+						maybeMakeStateMachineTable
+							makeStateMachineTable
+								遍历transitionsListNode(之前的一系列addTransition加入很多节点)，压入栈stack。
+								然后依次出栈(不嫌麻烦?),不断地调用apply方法，即ApplicableSingleOrMultipleTransition::apply。
+									ApplicableSingleOrMultipleTransition::apply
+										根据传入的preState(即addTransition的preState)从stateMachineTable找到对应的map,然后讲event和transition一起put到该map(为addTransition传入的event和hook构造的SingleInternalArc)。
+		特别说明: 至此stateMachineTable已经被设置号了。stateMachineTable是一个双层的map,他的key为addTransition中的preState,value为子层map。子层map的key为event,value为transition(key和value分别对应于addTransition传入的event和hook)	
+		总结: 截止到这里状态机stateMachine构造完成，这里主要生成了状态机组件stateMachineTable的双层map结构。尽管咱是没有继续深入，可以轻松猜测到preState----(event)--->transition的使用流程。即某一个状态下经过某个时间调用后一个钩子程序(transition或hook)。
+		(a.3) stateMachine.doTransition
+			下面分析状态机处理时间的流程。
+			根据前面分析会调用InternalStateMachine.doTransition,从这里开始分析:
+			InternalStateMachine.doTransition						
+				StateMachineFactory.this.doTransition			//第一个参数是this(表示RMStateStore实例)，第二个参数是currentState(表示当前状态)
+					根据传入状态(这里已经他的叫法已经从currentState的改为oldState)从stateMachineTable获取子map，即transitionMap。
+					然后在子map中根据event的找到钩子处理类transition(SingleInternalArc类)。
+					然后执行transition.doTransition(即SingleInternalArc::doTransition，即SingleInternalArc由addTransition的postState和hook构造)
+						调用hook.transition(hook即addTransition传入的第四个参数，例如new StoreAppTransition())
+							StoreAppTransition.transition
+						返回postState(即addTransition传入的第二个参数)
+
+(b) YARN-4209失败的原因
+从RMStateStore.removeRMDelegationToken开始分析
+removeRMDelegationToken
+	handleStoreEvent				//参数为new RMStateStoreRMDTEvent(rmDTIdentifier, null, RMStateStoreEventType.REMOVE_DELEGATION_TOKEN)
+		将当前的状态赋值给oldState
+		this.stateMachine.doTransition		//假设之前是ACTIVE状态，传入的时间类型为RMStateStoreEventType.REMOVE_DELEGATION_TOKEN,		
+			RemoveRMDTTransition::transition			//具体见前面的分析
+				removeRMDelegationTokenState
+				若抛出异常，调用notifyStoreOperationFailed，可以知道这个已经讲状态更该为FENCED。
+			但是根据前面介绍，这里会返回到SingleInternalArc::doTransition继续执行，会返回postState。由于postState被设置为ACTIVE，所以状态这这阶段由ACTIVE变为FENCED又变为ACTIVE。
+
+(c) 修改的方案
+修改的代码较多，但是很类似。
+主要讲postState状态改为Set方式传入，把各种transition(譬如StoreAppTransition)的实现的接口从SingleArcTransition改为MultipleArcTransition。MultipleArcTransition会根据transition方法返回值来返回状态(详见代码，比较容易)。因此，不会造成向SingleArcTransition一样返回值状态值始终为postState。

@@ -1,0 +1,72 @@
+0. 配置信息
+172.18.149.181 NN1 	RM1				 	 
+172.18.149.182 NN2 	RM2					 
+172.18.149.183 DN		NM	JN	ZK	JH
+172.18.149.184 DN 	NM	JN	ZK 
+172.18.149.185 DN		NM	JN	ZK
+#172.18.149.186 DN 	NM	JN	ZK
+ssh配置，略
+
+1. zookeeper的启动
+(1) 修改/data1/zmhadoop/zookeeper/data/myid的内容为对应的节点id。
+(2) 启动zookeeper服务
+	分别进入172.18.149.184，172.18.149.185，172.18.149.186启动zookeeper服务，执行如下命令:
+		./zkServer.sh start
+(3) 检查
+	启动三个服务之后，可以如下命令来检查zookeeper服务是否正常:
+		bin/zkCli.sh -server 127.0.0.1:2181
+注: zk这里使用root用户启动
+
+2. HDFS的启动
+(1) 修改hadoop的配置文件，注意yarn.resourcemanager.ha.id要对应于当前节点的RM的名称。(实际是启动Yarn的注意事项)
+(2) 创建必要的目录，并设置好权限。
+(3) 格式化zookeeper集群
+		hdfs zkfc -formatZK
+(4) 启动journalnode
+		hadoop-daemons.sh --hosts jn_slaves start journalnode			
+		注:jn_slaves是部署的jn的主机的ip地址。
+(5) 启动NN 
+	(5.1) 进入172.18.149.181，格式化NN1。
+			hdfs namenode -format
+	(5.2) 启动NN1
+			hadoop-daemon.sh start namenode
+	(5.3) 进入172.18.149.182，格式化NN2
+			hdfs namenode -bootstrapStandby
+	(5.4) 启动NN2
+	hadoop-daemon.sh start namenode
+		注:这时候两个NN都是standby。
+			 可以通过管理员命令hdfs haadmin -getServiceState nn1(或nn2)查看NN状态。或者是网页查看，默认端口号50070(由dfs.namenode.http-address.ns1.nn1设置)。
+(6) 启动DN
+	hadoop-daemons.sh start datanode
+		注:启动的时候，可能出现clusterID不一致导致DataNode无法启动。是因为DN的目录本身就有集群信息，与新格式化的的集群的ID必然不同，因此造成DataNode无法启动。每次格式化NN的时候，最好也把DN的相应目录进行一次格式化。
+(7) 启动zkfc
+	hadoop-daemons.sh --hosts nns start zkfc			注: nns是记录两个NN的ip地址的文件。
+	这里时候两个standy节点中其中有一个变为了active,hdfs可以正常工作了。
+注: hdfs使用hadp用户启动
+
+3. Yarn HA的启动
+(1) 启动RM
+	分别进入181和182，执行如下命令启动RM:
+		yarn-daemon.sh start resourcemanager
+	注: 这里可以使用yarn rmadmin -getServiceState rm1(rm2)查看rm1(rm2)的状态为active，可以通过web访问(50320)。
+(2) 启动NM
+	执行下面的命令:
+		yarn-daemons.sh start nodemanager
+(3) 启动JH
+	mr-jobhistory-daemon.sh start historyserver
+
+注: 这里发现web页面访问RM的时候，没有显示节点。只有使用yarn node -list -all的时候才能发现四个节点，且都处于UNHEALTHY状态。
+		通过http://bjm6-decare-149181.hadoop.jd.local:50320/cluster/nodes/unhealthy可以查看unhealthy节点的信息，查看Health-report列发现是因为没有简历/data*/yarn/local目录。增加相应的目录，并修改相应权限即可。
+(4) 测试Yarn
+	hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar wordcount /test/in /test/out
+	hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar teragen
+
+问题:
+http://172.18.149.183:19888/jobhistory
+和
+http://bjm6-decare-149181.hadoop.jd.local:50320/cluster/apps
+区别是什么?
+
+
+
+

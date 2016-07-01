@@ -1,0 +1,51 @@
+(1) 一个读取hdfs文件的例子
+	//需要把hadoop的配置路径配置到Classpath或eclipse下的external class folders	
+	FileSystem dfs = FileSystem.get(new Configuration());					//构造了DistributedFileSystem对象
+	FSDataInputStream inStream =  dfs.open(new Path("/test/a.txt"),4096);			//实际	inStream为HdfsDataInputStream对象
+	byte[] buf = new byte[1024];
+	inStream.read(buf);
+	System.out.println(new String(buf));
+
+
+(2) open操作
+DistributedFileSystem.open
+	更新文件系统统计计数，处理相对路径
+	构造一个FileSystemLinkResolver的匿名子类，并调用其resolve方法返回，实质执行doCall方法
+		DFSClient.Open		//构造得到的DFSInputStream对象会放入到FSDataInputStream.in中
+			DFSInputStream.DFSInputStream		//构造DFSInputStream对象，并返回，如下面所述，这里已经有了存储文件的block信息了
+				设置dfsClient,verifyChecksum,src，cachingStrategy
+				DFSInputStream.openInfo				
+					fetchLocatedBlocksAndGetLastBlockLength
+						dfs.dfsClient.getLocatedBlocks
+							DFSClient.getLocatedBlocks
+								callGetBlockLocations
+									namenode.getBlockLocations			//代理远程调用NN的getBlockLocations
+						然后获取最后一个块last，检查这个块下是否存在locations
+						readBlockLength			//获取最后一个块的长度并返回
+							遍历每一DN，分别构造客户端代理，然后调用getReplicaVisibleLength
+					设置lastBlockBeingWrittenLength
+		DFSClient.createWrappedInputStream
+			返回HdfsDataInputStream对象
+
+(3) read操作
+	HdfsDataInputStream.read
+		FSDataInputStream.read
+			in.read								//in为open中DFSInputStream结构体，这里openInfo中已经设置了块的位置，长度等信息
+				DFSInputStream.read
+					DFSInputStream.readWithStrategy
+						blockSeekTo			//找到当前的Node，即currentNode。传入的参数是在该文件中的偏移值。
+							关闭当前的BlockReader
+							getBlockAt		//得到target对应文件偏移开始的那个数据块targetBlock,并赋值给currentLocatedBlock
+							chooseDataNode		//选择第一个未忽略的DataNode作为最优的(retval)
+							设置blockReader		//根据之前获得的最优的DataNode等信息构造的BlockReader对象
+							返回chosenNode，即选定的DN的信息(DatanodeInfo)
+							计算读取的长度readLen 	//是传入的len和从pos到当前块的末尾长度，这两者的最小值
+							检查最后一个块			(?????isLastBlockComplete含义?????)
+						readBuffer
+							根据之前获取的BlockReader读文件
+					
+							
+						
+								
+						
+

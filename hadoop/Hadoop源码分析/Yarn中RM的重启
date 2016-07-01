@@ -1,0 +1,27 @@
+
+
+
+
+
+
+
+
+
+
+RM保存应用数据
+RMStateStore.storeNewApplication
+	ApplicationStateData.newInstance
+		newInstance
+			...
+			Records.newRecord
+				RecordFactoryPBImpl::newRecordInstance
+					getPBImplClassName
+						这里构造的具体对象的类为原类加上“PBImpl”，即这里构造了ApplicationStateDataPBImpl对象
+			...
+	
+	newRecordInstance
+
+可以知道，默认情况下Records.newRecord(ApplicationStateData.class)得到的对象是ApplicationStateDataPBImpl对象。
+
+
+

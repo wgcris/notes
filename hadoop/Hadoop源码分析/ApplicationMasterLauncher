@@ -1,0 +1,93 @@
+1. ResourceManager的ApplicationMasterLauncher分析
+ApplicationMasterLauncher是一个?????
+它在ResourceManager.activeServices.applicationMasterLauncher中。
+
+
+ApplicationMasterLauncher.ApplicationMasterLauncher
+	构造launcherHandlingThread线程类实例
+
+ApplicationMasterLauncher.serviceInit
+	计算threadCount的值，这里是线程池中基本的线程数目和最大允许的线程数
+	构造线程池launcherPool,工作队列可以达到Integer.MAX_VALUE
+	获取yarn.resourcemanager.nodemanager-connect-retries的值(默认是10)写入到"ipc.client.connect.max.retries.on.timeouts"配置项
+	
+ApplicationMasterLauncher.serviceStart
+	启动launcherHandlingThread线程，实质是LauncherThread类的实例
+
+LauncherThread.run
+	从阻塞队列中取事件toLaunch
+	launcherPool.execute		//放入线程池中处理
+
+问题就在于如何masterEvents如何入队列的，这里由launch和cleanup两种方法使其入队。
+这里以launch说明:
+根据"Yarn应用程序的启动"的流程可知ApplicationAttempt保存完状态之后会发送AMLauncherEventType.LAUNCH事件,调用applicationMasterLauncher.handle方法,
+	
+
+
+
+
+对于启动一个Container，有两种方式。第一种是启动AM Container，第二种是AM启动普通Container。
+启动AM Container具体由AMLauncher启动
+启动普通Container具体是AM通过心跳得知RM已经分配到Container之后会调用用户传入的handle.onContainersAllocated函数。
+本例中onContainersAllocated函数
+	主要构造启动上下文，调用NMClientAsyncImpl.startContainerAsync启动Container
+		NMClientAsyncImpl.startContainerAsync
+			构造一个StartContainerEvent放入到event中，待eventDispatcherThread线程处理
+			eventDispatcherThread线程会不断地取出event，然后放入线程池中执行，具体执行ContainerEventProcessor.run
+			ContainerEventProcessor.run
+				StatefulContainer.handle			//触发状态机的转换
+					ContainerState.REP==(ContainerEventType.START_CONTAINER,StartContainerTransition)==>ContainerState.RUNNING
+						NMClientAsyncImpl.StartContainerTransition.transition
+							NMClientImpl.startContainer
+							...
+								通过RPC远程调用ContainerManagementProtocol.startContainers
+									startContainerInternal
+									...
+							...
+	
+当资源处理话完成之后，会发送ContainersLauncherEventType.LAUNCH_CONTAINER事件给ContainersLauncher处理
+ContainersLauncher.handle
+	
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+配置项目:
+配置项名称																															程序中的变量名										默认值
+yarn.resourcemanager.amlauncher.thread-count													threadCount											50
+
+
+
+
+
+
+

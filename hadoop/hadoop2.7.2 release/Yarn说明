@@ -1,0 +1,303 @@
+(1) YARN-4434 (*)
+主要修改了文档hadoop-yarn-project/hadoop-yarn/hadoop-yarn-site/src/site/markdown/NodeManager.md
+对于yarn.nodemanager.disk-health-checker.max-disk-utilization-per-disk-percentage的设置
+代码和yarn-default.xml的默认值为90，而MD文档写成了100。经文档修改的默认为值为90
+
+(2) YARN-4424
+hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/RMAppImpl.java
+getFinalApplicationStatus函数中去掉了readLock的锁定。
+因为该readlock的锁是RMAppImpl的，currentAttempt是RMAppImpl生成的RMAppAttemptImpl对象，与该readlock无关。
+而且currentAttempt.getFinalApplicationStatus函数中已经进行了加锁操作。
+
+(3) YARN-4365
+YARN Node Labels(2.6.0引入的功能)功能是对NodeManager打上标签。同时可以设置队列的标签，使队列必须运行在具有相同标签的计算机上。(注:标签之间不重叠)
+ResourceManager中增加了RMNodeLabelsManager类型的服务, RMNodeLabelsManager的store变量用于记录具体内容。
+	(3.1) init函数中，修改为"如果fsWorkingPath记录的目录不存在，就创建它"。原来是不检查直接就创建的。fsWorkingPath由yarn.node-labels.fs-store.root-dir创建。bug: 如果HDFS处于safemode, 将无法创建目录。而如果目录已经存在的情况下,这时候可以正常启动RM，之前的版本因为HDFS处于安全模式下导致抛出异常，回使RM无法正常启动。
+	(3.2) 将setFileSystem修改为默认访问权限
+	(3.3) hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/nodelabels/TestFileSystemNodeLabelsStore.java中增加了testRootMkdirOnInitStore测试方法
+参考资料:
+https://hadoop.apache.org/docs/stable/hadoop-yarn/hadoop-yarn-site/NodeLabel.html
+http://dongxicheng.org/mapreduce-nextgen/hadoop-yarn-label-based-scheduling/
+
+(4) YARN-4354
+资源本地化相关，带分析
+I saw public localization on nodemanagers get stuck because it was constantly rejecting requests to the thread pool executor.
+
+(5) YARN-4348
+在YARN HA的模式与HDFS HA略有不同，也都采用ACTIVE和STANDBY切换的模式。(这里仅仅简单介绍与本bug相关的部分)
+RM切换的时候，新的RM会加载之前RM的信息，因此需要一个共享文件系统存放信息，可以使用FileSystemRMStateStore或ZKRMStateStore
+对于使用ZooKeeper的时候，之前版本的设置的延时时间为错误的写为zkSessionTimeout，设计应该为zkResyncWaitTime。就会出现已经超时了，但是sync同步工作已经完成的现象。
+注:其实hadoop-2.7.1已经修正了这个问题，2.7.2与2.7.1相关部分代码一致。这个patch是误打入到2.7.2中的。
+
+(6) YARN-4344
+这个意思是说，当DataNode与NameNode重连的时候，如果DataNode的配置或能力(capabilities)有变化，NameNode无法获取这样的变化。
+注: 针对该问题，而在2.7.2已经对2.7.1的相关过程进行了修改，增加了重连节点重新获取capabilities的代码。因此，实际描述的问题已经在该patch之前解决。
+关于这个补丁是真对于2.7.2的修改,因此并没有合并到2.7.2版本中。该patch重新调整了代码的结构。具体两个补丁如下:
+(6.1)YARN-4344.001.patch
+2.7.2对于无App运行的节点，首先移除旧节点。然后根据新的节点是否与旧节点是否相同，选择重新增加旧的节点还是new一个新的节点在增加(软件上对象的"增加")。该patch修改为首先不移除就节点，如果新旧节点相同，触发封信事件，如果不同在移除旧节点，添加新节点。				注:该path未加入2.7.2中。
+(6.2)YARN-4344.002.patch
+2.7.1版本的CapacityScheduler.java和FifoScheduler.java在增加节点事件addNode的方法中在增加集群资源的代码中使用
+Resources.addTo(clusterResource, nodeManager.getTotalCapability());
+而2.7.2修改为
+Resources.addTo(clusterResource, schedulerNode.getTotalResource());
+事实上，两者是一样的，构造schedulerNode对象的时候会把nodeManager的capabilities传入。
+注:该path已经加入2.7.2中。
+
+(7) YARN-4326
+解决无法超时，无法连接timerline server的问题。
+该patch仅仅修改了单元测试文件TestDistributedShell.java。因为该单元测试在试图连接timeline server的时候，并没有配置timeline-service.webapp.address(TIMELINE_SERVICE_WEBAPP_ADDRESS)。
+注:timerline server是一个用于存储和查看当前app和历史app的服务器。
+
+(8) YARN-4321
+ZKRMStateStore.java中的内部类ZKAction的runWithRetries会不断运行指定操作。
+2.7.1中，在非HA模式下，如果捕获到NoAuthException异常，没有继续抛出异常，而不断地循环下去。造成非HA模式下(前提当然也是使用ZKRMStateStore类存储RM的状态)，如果连接ZK出现认证异常，会导致程序不断连接，进入死循环。2.7.2对非HA模式的异常进行了正常的抛出。
+
+(9) YARN-4320
+又是单元测试类的写法问题。TestJobHistoryEventHandler失败，是因为没有默认的绑定端口，即没有配置timeline-service.webapp.address(TIMELINE_SERVICE_WEBAPP_ADDRESS)。实际同YARN-4326是同一个问题。
+
+(10) YARN-4313
+原来2.7.1版本MiniYARNCluster的serviceStart方法中，使用判断historyServer的状态不为STATE.INITED(即为STARTED状态时)表示服务开启完毕。
+但是实际上historyServer.start(实际调用AbstractService.start)在最开始变已经置状态为STATE.STARTED。而此时有些服务尚未开启。因此STATE.STARTED与服务的开启并不同步。因此设置标志位当start运行完成之后置标志位来确保服务开启完成。
+
+(11) YARN-4312
+调整了单元测试类TestSubmitApplicationWithRMHA的部分超时时间。
+
+(12) YARN-4281
+RM的app页面损害的问题。rm的app页面会失效由于出现500错误。可能由以下问题引起错误:ugi是null, 成功的app不能恢复,而且代码中没有捕获ContainerNotFoundException异常，而是直接抛出。
+修改两处内容:
+	(1) 如果UGI没有获取到(至于为什么没有获取到?)也依然去获取打印信息(原来会抛出异常造成页面出问题)
+	(2) 获取AM的Container的ID，当无法找到ContainerId的时候，直接返回null(原来会抛出异常造成页面出问题)
+	(3) 增加了Blacklisted Nodes列
+
+(13) YARN-4241
+yarn-default.xml的description拼写错误。yarn-nodemanager.local-dirs应该写成yarn.nodemanager.local-dirs。可以忽略。
+另外，最早的那个patch在yarn-default.xml中增加了yarn.nodemanager.disk-health-checker.disk-utilization-watermark-low-per-disk-percentage的默认值，但是这个patch并没有合并到最新版本。
+
+(14) YARN-4209
+RMStateStore的FENCED状态没有生效。
+注: 应该是YARN HA模式的bug。
+详细讲"Yarn详细说明"文档
+
+(15) YARN-4180
+当RM试图启动一个container的时候，NM正在重启，将会返回NMNotReadyException异常。YARN-3842已经对处理这一问题，抛出该异常的时候进行重试操作(修改ServerProxy类，NMProxy继承于次)。
+在2.7.1中，但是YARN-3842尽管修改了这个问题，但是并没有应用在AMLauncher上，这里把getContainerMgrProxy的返回用NMProxy.createNMProxy的返回值返回，这里已经假如了如果NM未准备号重试的机制了。
+
+(16) YARN-4158 (*)
+AppLogAggregatorImpl#uploadLogsForContainers的writer.close被调用两次，这里修改了。
+
+(17) YARN-4127
+当开启RM failover的时候，zkRootNodeAcl会默认使用RM的ID作为ACL字符串。如果这时候关闭faileover,将出现认证错误。
+这种错误的原因可能是因为在非failover模式下，RM不用RM-ID连接ZK。
+Yarn HA相关问题,应该是在使用ZKRMStateStore的问题。
+
+(18) YARN-4105
+CapacityScheduler DRF相关问题。由于集群使用fair，暂不分析。
+
+(19) YARN-4103
+RM的webservices丢失了前缀，这里加上。
+
+(20) YARN-4101
+之前版本没有报警信息，当zk和rm之前由连接问题的时候。这里增加报警信息使更容易发现集群问题。最好加上。
+
+(21) YARN-4096
+假如为一个应用进行日志聚集功能的初始化过程失败，本地的日志没有被删除。
+
+(22) YARN-4092
+在HA模式下，假如两个RM都是standby,RM的web界面不能打开。会在两个standby之间保持重定向。
+web相关，暂时不深入!!!!!
+
+(23) YARN-4087
+(a) 修改yarn.resourcemanager.fail-fast默认为false
+(a.1)当RM重启的时候(addApplicationOnRecovery),capacity资源队列中原来的节点移除或不再是叶子节点的时候，根据yarn.resourcemanager.fail-fast判断是直接发送给RMApp(表示一个应用的状态机)一个KILL事件(为true)还是抛出异常(false)。
+(a.2)RMStateStore中出现存储状态异常(notifyStoreOperationFailedInternal),非HA模式下，是否直接RMFatalEvent时间。
+(b) RMStateStore和ZKRMStateStore的部分代码关于对错误处理的地方，没有正确做出状态的转变等工作。
+
+(24) YARN-4047
+该补丁是一个优化的补丁。
+getApplications调用开销比较大。因为checkAccess需要调用scheduler.checkAccess,而操作scheduler是由获取锁的，scheduler又同时处理心跳，app分配等工作，所以延时较大。这里讲checkAccess移动到while循环的最后，防止不必要的访问scheduler(有一些会continue)。
+注: 该补丁有点问题。实际在getApplications中，补丁文件显示在remove中
+
+(25) YARN-4041
+对于RM重启恢复app的时候，他会为每一个active的app重新申请delegation token(RM的授权tocken,持有该令牌的才可以与RM安全正常通信)。假如这个token服务器碰巧死掉啊或因为active的app过多而反应慢，可能会花费较长时间去重启RM。
+这个补丁讲重新获取token的操作从同步获取改为异步获取。
+
+(26) YARN-4009
+提供CORS支持。(待确认是否有用?????)
+
+(27) YARN-4005
+假如一个container完成后, NM仅仅从context中讲其移除，而没有把它加入到recentlyStoppedContainers中。NM也不会将其从NMStateStore移除。
+
+(28) YARN-4000
+假如一个程序在队列A中。然后重启RM，但是这次重启队列配置配置改变了，队列A变成其他子队列了，RM讲因为NullPointerException死掉。(队列数中只有也叶子节点能使用队列)
+(增加内容较多!!!!!稍后详细分析!!!!!)
+
+(29) YARN-3999
+RM挂起。假如外部系统(ATS或ZK等)变的很慢。如果处理事件的时间超过10分钟，所有应用都会因过期而死掉。
+具体的实现:			//注:这个2.7的最新的补丁与实际打到2.7.2的略有差别
+	(a) 在AsyncDispatcher.serviceStop会在服务结束的时候处理尽所有的请求，这里如果ATS或ZK很慢，最一致阻塞。
+			所以，在该方法中设置一个配置项目，来配置最大的时间。
+	(b) 把ATS服务(RMApplicationHistoryWriter和SystemMetricsPublisher)从RM Active服务中移除。当转换为standby的时候不同等待ATS事件的完成。
+	(c) 先停止了RMActiveServices下的服务，然后在保存状态。会比之前提前关闭服务，譬如ClientRMService服务停止的置前，可以叫客户端更快感知服务关闭。
+
+(30) YARN-3990
+等节点被增加或移除的时候，NodeListManager会向所有程序发送RMAppNodeUpdateEvent。但是对于finished/killed/failed发送事件是没必要的。这个补丁减少这些没有必要的工作
+
+(31) YARN-3978
+该补丁建议提供一个配置项目去关闭保存非AM container的元数据存储。
+因为补丁制作这提出，一周所有的app数据元存储的话，在Application History Server的数据库上会涨到接近1T的本地空间。
+
+(32) YARN-3975
+修改WebAppProxyServlet功能:当查询app report的时候,但是没有追踪到URL的时候。
+因为试图访问RM得到ApplicationNotFoundException，不应该讲RM的网页重定向到user界面。
+
+(33) YARN-3969
+capacity的问题，要不要用?????
+
+(34) YARN-3967
+当RM不知道应用信息的时候从AHS获取。
+一个大集群，RM可能会丢掉30分钟之前的app信息，如果想从RM获取app信息，这里添加从AHS(Application History Server)中获取app信息的功能。
+
+(35) YARN-3925
+ContainerLogsUtils::getContainerLogFile读container的日志文件失败
+?????
+
+(36) YARN-3905
+从RM重启的时候，点击Application History URL (http://RmHostName:8188/applicationhistory)的应用id，会变为500错误。
+web问题
+
+(37) YARN-3896
+如果节点重连到RM。RM会设置心跳的id为0。如果RM为节点的心跳设置为0之前，由收到了该节点的id，会因为ID不一致使得RMNode从RUNNING到REBOOTED状态。
+修改之前，通过重连事件将心跳id设置为0，这里改为仅仅NM向RM注册时候将id设置为0。因为注册是一个同步事件(即nm注册的时候必须等待rm返回才能执行接下来的步骤)，所以不会造成id的不一致。而之前的rm处理nm发来的重连是一个异步事件。
+(心跳包延时在重连RM之后达到?????)
+
+(38) YARN-3893
+Admin::transitionToActive如果refeshAll出现异常会出现两个RM同时处于active状态。
+如下三个操作会导致refeshAll出错:
+(a) 在转换过程中Capacity-scheduler.xml配置错误。
+(b) 由于配置刷新ACL失败。
+(c) 由于配置刷新用户组失败。
+猜测出现该问题的原因是:
+	之前的版本，如果refeshAll抛出异常，尽管RM已经切换到了ACTIVE，但是会是返回错误。
+	所以，可能会造成某种场景，某个RM的素有active服务已经开启了，但是状态还没有被设置为ACTIVE。
+注: 手动切换也会变为两个ACTIVE。
+
+(39) YARN-3878
+本例子修改了AsyncDispatcher可能出现的挂起的问题。
+AsyncDispatcher中有一个drained，调用serviceStop的时候会判断drained是否为true来判断是否仍然由事件没有处理，如果有等待，没有就退出。
+GenericEventHandler(是getEventHandler的实际实现类)的handle函数。2.7.1中处理一个事件，先把drained设置为false，然后加入事件列表eventQueue。
+如果之前的事件列表eventQueue为空，接受到一个事件在put到事件列表的时候出现异常，会出现drained为false，eventQueue为空的异常现场。这时候serviceStop会被挂起。因此2.7.2在异常处理中重新获取drained的值。
+另外修改了DrainDispatcher, 似乎没有使用DrainDispatcher。
+
+(40) YARN-3857
+simple模式下，注册了ClientTokenMasterKey，但是没有unregister，造成内存泄露。
+
+(41) YARN-3802
+NM重连的时候，如果节点还在运行，继续使用原来的节点信息进行注册。可能出现两个RMNodes拥有相同的id。
+
+(42) YARN-3798
+ZKRMStateStore::runWithRetries中，只要SESSIONEXPIED(或SESSIONMOVED)发生的时候才应该创建一个新连接。
+原来的runWithRetries无论什么情况都重新建立连接，没有这个必要。
+
+(43) YARN-3793
+NM的开启重启work-preserving功能时，恢复工作会出现空指针异常(NPEs)。删除子文件夹的错误。
+
+(44) YARN-3780
+重连判断NM的配置(totalCapability)是否改变的时候，原来使用"!="比较两个对象,这里修改为equals
+
+(45) YARN-3740
+仅仅讲YARN-3700增加的配置项的名称更改。
+
+(46) YARN-3727
+如果缓冲目录存在，资源本地化可能会失败。
+问题的原因是startResourceLocalization或finishResourceLocalization中FSDownload::call的file.rename如果抛出异常应该删除缓冲目录。
+
+(47) YARN-3700
+当前，当加载yarn的timeline service的网页的时候，会加载所有app。假如job过多，速度会非常慢。
+新增加了功能，没仔细看，猜测是增加配置项yarn.timeline-service.generic-application-history.max-applications，设置在timeline的ui中可获取的最大的app数目。
+
+(48) YARN-3697
+2.7.1中的FairScheduler的调度线程(ContinuousSchedulingThread)不能正常停止。
+这里修改为YarnRuntimeException或InterruptedException异常退出。ContinuousSchedulingThread就可以被中断了。
+
+(49) YARN-3690
+mvn site失败，调整了部分包的引用。
+
+(50) YARN-3624
+AppliactionHistoryServer不应该改变filter chain中的顺序。额外的文件应该加载filter chain队尾而不是队首。
+(filter chain?????AppliactionHistoryServer具体组件?????  暂时不考虑具体)
+
+(51) YARN-3619
+ContainerMetrics::unregisters在getMetrics的时候引发的ConcurrentModificationException。
+修改为待finish再unregisters。没深入看，估计直接改了就行。
+
+(53) YARN-3580
+TestClientRMService单元测试
+
+(54) YARN-3535
+scheduler必须重新请求container资源当RMContainer从ALLOCATED转向KILLED状态
+RMContainerImpl中将ALLOCATED经过RMContainerEventType.KILL事件转化为RMContainerState.KILLED的transition更改为ContainerRescheduledTransition，并增加ContainerRescheduledTransition类。(原来处理的类为FinishedTransition)
+这里需要注意的是:
+RMContainerState.ALLOCATED是已经在调度器层面上分配Container，但是AppAttemptImpl暂时没有获得它，所以不能简单调用FinishedTransition，因为还要!!!!!。这里使用的处理方法是FinishedTransition的子类，在完成FinishedTransition工作前发送一条调度事件ContainerRescheduledEvent。会触发ContainerRescheduledEvent.recoverResourceRequestForContainer进行重新请求。然后FinishedTransition会把之前的请求分配信息删除。
+这里需要说明一下:
+在Fair调度器的后台进程中，如果发现某个资源队列下有app提交，就创建一个RMContainer(这时候状态为NEW),然后几乎是马上会fair调度器会给他发送RMContainerEventType.START事件，转换为RMContainerEventType.ALLOCATED状态。会调用ContainerStartedTransition，给RMAppAttemp发送RMAppAttemptEventType.CONTAINER_ALLOCATED事件(这回触发RMAppAttemp调用allocate得到Container)，调用allocate从SCHEDULED状态转换为ALLOCATE_SAVING,而此时RMAppAttemp正好为SCHEDULED状态，等待该事件。但是如果这个过程中接收到KILL事件，可以会造成RMAppAttemp被挂起。(好像说的不对...)
+
+(55) YARN-3508
+RM的dispatcher阻止抢占。
+AsyncDispatcher持续阻塞在一个高使用率的CapacityScheduler的获取锁的过程中，因为他要分发一些抢占事件。?????或再用一个现成避免延时。
+(?????应该有用，但需要确认是否影响fair?????) capacityScheduler咱是不看
+
+(56) YARN-3248
+把黑名单的统计到web页面中
+
+(57) YARN-3170
+更新文档，忽略。
+
+(58) YARN-3136
+优化工作
+ApplicationMasterService中getTransferredContainers是AM注册的瓶颈，往往会卡在这里，这要是因为获取锁。(?????优化过程待分析?????)
+
+
+(59) YARN-2902
+假如容器在本地化的过程中被kill或stop了，资源还会停留在DOWNLOADING状态。如果其他container没有请求该资源，这个资源的引用计数一直为0，也不会被删除。
+很明显，remove资源的时候忽略了处于Downloading状态的资源。但是2.7.2并没有打上这个patch。
+
+(60) YARN-2890
+MiniMRYarnCluster没有考虑配置的值配置中是否使用timeline service。
+
+(61) YARN-2859
+MiniYARNCluster模式下应该使用随机端口，ApplicationHistoryServer却使用默认的8188端口。
+
+(62) YARN-2801
+增加Node Label的文档
+
+(63) YARN-2513
+新功能，允许用户接口。(!!!!!待深入!!!!!)
+
+(64) YARN-2019
+ZKRMStateStore错误会导致RM死掉，而RM的死掉应该是一个HA RM的内部问题。
+这里增加配置项目决定ZKRMStateStore错误是否导致RM死掉。(通过yarn.resourcemanager.fail-fast判断)
+
+
+
+附录A: 关于资源本地化
+NodeManager的containerManager的rsrcLocalizationSrvc(ResourceLocalizationService类)是一个资源本地化服务，会随着NodeManager启动而启动。
+ResourceLocalizationService中设置了提供了LocalizationProtocol服务的rpc-server，为各个DefaultContainerExecutor提供服务。
+从一个开启一个容器的角度分析
+DefaultContainerExecutor
+	startLocalizer
+		创建一些目录,拷贝token等
+		创建ContainerLocalizer
+			//参数: 
+			ContainerLocalizer::runLocalization
+				nodeManager是一个rpc-client
+				创建下载线程池exec
+				localizeFiles
+					向ResourceLocalizationService发送心跳包
+					从获取的response中得到想要的资源列表
+					download并提交下载这些资源的线程对象，并运行。因此关注其call方法。
+						copy函数会根据源地址信息(hdfs地址?????)拷贝到本地文件系统。
+
+附录B:
+RMNodeImpl这个类用于跟踪一个节点上所有应用或容器的,用于表示一个NodeManager的相关结构体。
+ResourceTrackerService(RM的一个服务)中RMNodeImpl是一个表示发来请求的远程的NM的资源的结构体，供RM使用，它其中的stateMachineFactory是一个记录节点状态的状态机。
+

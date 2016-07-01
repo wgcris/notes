@@ -1,0 +1,192 @@
+﻿一、 serveapi分析
+main 		docker/docker.go
+	flag.Parse													//分析参数
+	showVersion													//显示版本号
+	mainDaemon													// docker/daemon.go
+		engine.New												// engine/engine.go
+			生成Engine对象eng
+			eng.Register("commands",...)		//将一个函数注册到Engine对象的map类型的变量handlers中
+			并把全局的globalHandlers拷贝到eng.handlers中
+		signal.Trap(eng.Shutdown)					//处理中断
+		builtins.Register									// builtins/builtins.go
+			daemon(eng)											//注册"init_networkdriver", "acceptconnections"到eng.handle
+			remote(eng)											//注册"serveapi"到eng.handle
+			events.New().Install(eng)				//注册"event","log","subscribers_count"到eng.handle
+			注册"version"到eng.handle
+			registry.NewService.Install			//注册"auth","search"到eng.handle
+		启动新的协程
+			NewDaemon												// daemon/daemon.go	, 创建Daemon对象d
+				NewDaemonFromDirectory				//暂时不展开分析
+					...
+					sysInitPath := utils.DockerInitPath(localCopy)
+					...
+					d.execDriver = execdrivers.NewDriver				// daemon/execdriver/execdrivers/execdrivers.go
+						选择使用lxc还是native，这里使用native
+							native.NewDriver(path.Join(root, "execdriver", "native"), initPath)
+								NewDriver							// daemon/execdriver/native/driver.go
+									将容器的根目录权限设置为700
+									InstallDefaultProfile				// vendor/src/github.com/docker/libcontainer/apparmor/setup.go
+										docker-1.20暂时没有使能该功能
+									返回driver对象，设置了root,initPath,activeContainers
+					..		
+			d.Install(eng)									// daemon/daemon.go
+				eng.Register									//将"attach","build","commit","container_changes","container_copy","container_inspect","containers","create","delete","export","info","kill","logs","pause","resize","restart","start","stop","top","unpause","wait","image_delete"注册到eng.handle中
+				daemon.Repositories.Install		// graph/service.go 将"image_set","image_tag","tag","image_get","image_inspect","image_tarlayer","image_export","history","images","viz","load","import","pull","push"注册到eng.handle中
+				eng.Hack_SetGlobalVar					//设置eng.hack[httpapi.daemon]=daemon
+			eng.Job("acceptconnections").Run()				//下面分两个步骤分析
+				eng.Job("acceptconnections")						// engine/engine.go
+					构造Job结构体													// 结构体定义在engine/job.go中
+					查找注册在map类型的变量handler是否注册了名为"acceptconnections"的方法,找到赋值给job.handler, 即apiserver.AcceptConnections, 即api/server/server.go下的AcceptConnections
+				Run()																		// engine/job.go
+					job.handler														// 执行handler函数
+		接下来是设置和启动serveapi这个job,根据前面的分析会执行api/server/server.go下面的ServeApi函数
+			ServeApi													//主题为ListenAndServe函数
+				ListenAndServe									//protoAddr为unix://var/run/docker.sock,所以其中proto为unix
+					createRouter
+						创建一个Router对象r
+						创建一个两层的map对象m，可用于处理GET,POST,DELETE,OPTIONS请求						// serveapi可以处理的路由器请求在 api/server/server.go的createRouter中定义 
+						不断的加入路由路径					//这里涉及到第三方包gorilla/mux，这里不继续研究，仅知道是一个URL路由器就行
+					net.Listen										//设置监听													
+					httpSrv.Serve(l)							//开启服务
+
+二、 docker run全流程分析
+
+(1) 客户端注册的流程
+一般的docker命令: docker run -it ubuntu /bin/bash
+会执行docker/docker.go下的main函数
+
+main 		docker/docker.go
+	flag.Parse		//分析参数
+	showVersion		//显示版本号
+	这里不是守护线程，不启动
+	证书相关
+	client.NewDockerCli			//生成client对象
+	cli.Cmd									//api.client.cli.go
+		cli.getMethod					//获取方法method，返回CmdRun方法
+		method(...)						//执行方法，执行CmdRun方法(cmd)
+
+(1)运行docker run会执行到api/client/commands.go里面的CmdRun函数,因此从这里开始分析
+CmdRun
+	ParseSubcommand			//分析命令
+	处理ContainerIDFile相关
+	使用客户端调用
+	执行POST /containers/create?***，会执行postContainersCreate
+		postContainersCreate
+			回执行名字为create的Job, 会调用daemon.ContainerCreate (daemon/create.go的ContainerCreate函数)			//!!!!!特别说明这里的daemon是daemon/daemon.go中Install里面设置的，这在启动mainDeamon中设置了，因此为表示启动的全局daemon服务
+				ContainerCreate
+					daemon.Create					// daemon/create.go的Create函数
+						daemon.repositories.LookupImage			//获取对象img
+						img.CheckDepth()										//检查img层数
+						daemon.mergeAndVerifyConfig					//处理配置
+						daemon.newContainer
+							generateIdAndName									//生成一个随机的ID和名字
+							getEntrypointAndArgs							//获取entrypoint和args
+							创建Container类型的对象container
+							daemon.containerRoot							//猜测获取daemon端(即宿主机)上的root目录
+							GenLabels													//暂不考虑
+						daemon.createRootfs
+							os.Mkdir													//创建容器主目录
+							daemon.driver.Create							//创建元数据目录?????
+							daemon.driver.Get
+							daemon.driver.Put									//以上三个driver暂时不分析具体内容
+							graph.SetupInitLayer
+								创建初始化层，设置一些必要的配置   //这里引用了os包，文件那么具体放到哪里了？？？？？
+							daemon.driver.Create														
+						container.ToDisk()									//将container对象json化
+						daemon.Register											//将container加入到daemon.containers中,同时设置了container的daemon变量						
+		判断镜像是否存在，否则直接拉取镜像
+		判断POST /containers/create的返回结果
+		ContainerIDFile
+		sigProxy暂时不考虑
+		.
+		.
+		.
+		客户端调用，"POST", "/containers/"+runResult.Get("Id")+"/start", 会执行postContainersStart
+			postContainersStart												// api/server/server.go
+				会运行名字为"start"的job, 会执行daemon.ContainerStart
+					ContainerStart												// daemon/start.go
+						获取container结构体，检查等工作
+						container.Start											// daemon/container.go
+							setupContainerDns									//
+							Mount
+							initializeNetworking
+							prepareVolumesForContainer
+							setupWorkingDirectory
+							createDaemonEnvironment
+							setupMountsForContainer
+							container.waitForStart
+								container.monitor=newContainerMonitor					//赋值contianer.monitor对象
+								会执行container.monitor.Start									//要不发送startSignal退出，要么返回错误
+									Start																				// daemon/monitor.go
+										startLoggingToDisk												//将日志目录写入硬盘
+										NewPipes																	//创建一个管道pipes
+										LogEvent																	//启动名称为"log"的Job，这里暂时不分析了
+										m.lastStartTime														//设置containerMonitor的lastStartTime
+										运行m.container.daemon.Run									//containerMonitor的contianer恰好为要启动的container, daemon之前已经设置为全局daemon，因此Run会执行daemon/daemon.go中的Run方法,  daemon/daemon.go
+											daemon.execDriver.Run(c.command, pipes, startCallback)				//根据前面分析会使用native的execDriver,即执行daemon/execdriver/native/driver.go
+												d.createContainer(c)									// daemon/execdriver/native/create.go
+													设置container的Hostname,Tty,User,WorkingDir,Env,Cgroups.name,Cgroups.AllowedDevices,MountConfig.DeviceNodes,MountConfig.NoPivotRoot,RestrictSys
+													... 一些设置
+												... 一些设置
+												namespaces.Exec												//实质会执行vendor/src/github.com/docker/libcontainer/namespaces/exec.go
+													syncpipe.NewSyncPipe								//创建一个管道，实质就是一组相互连接的套接字
+													createCommand												//是namespaces.Exec传入的倒数第二个参数，是一个无名函数。
+														...???	暂时不分析
+													command.start												//为Golang官方的os/exec包的Cmd类型，start方法会执行command的所有命令，并立即返回。		这里会调用os.StartProcess方法,创建新进程。其中c.SysProcAttr是创建新名称空间的选项。
+														会执行d.initPath这个程序，而d.initPath实质是/usr/libexec/docker/dockerinit(docker-1.8.2, docker-1.2.0会有所不同)
+													...
+													command.Wait												//等待command的命令阻塞完成
+													
+三、dockerinit分析
+通过上面分析，可以知道docker run最后会运行dockerinit程序，这里分析dockerinit程序
+dockerinit程序在dockerinit/dockerinit.go下，分析如下
+main
+	reexec.Init																// reexec/reexec.go中
+		获取注册的"native"类型的initializer, 该initializer已经在/docker/daemon/execdriver/native/init.go中注册
+		initializer														//因此这里执行/docker/daemon/execdriver/native/init.go中initializer函数
+			写入container.json
+			获取路径
+			获取管道对象
+			namespaces.Init											// vendor/src/github.com/docker/libcontainer/namespaces/init.go
+				ResolveRootfs											// 确保路径不是连接文件，并获取其全局路径
+				LoadContainerEnvironment					// 清除当前的环境变量，然后使用新环境替换
+				ReadFromParent										
+				OpenAndDup
+				Setsid
+				Setctty
+				setupNetwork
+				setupRoute
+				label.Init
+				InitializeMountNamespace
+				FinalizeNamespace
+				...
+					SetupUser(container.User)
+						GetUserGroupSupplementaryHome(u, syscall.Getuid(), syscall.Getgid(), "/")						// vendor/src/github.com/docker/libcontainer/user/user.go
+							//参数: 其中syscall.Getuid(), syscall.Getgid()为默认的uid和gid，因为这时候是daemon启动的新名称空间的init进程，所以这时候默认为root用户
+							parseLine(userSpec, &userArg, &groupArg)							//如果输入"-u hadp"选项，userArg为"hadp",groupArg为nil						
+							ParsePasswdFilter
+								打开/etc/passwd文件																	//这里已经在新的名称空间中，因此是docker容器的/etc/passwd
+								parsePasswdFile
+								for s.Scan{
+									text = s.Text 	//获取一行
+									TrimSpace				//去除空格
+									parseLine				//读取每一行的数据并写入到结构体libcontainer/user.User中
+									根据传入的filter函数判断读到的用户是否是之前传入的hadp用户，如果是则追加到out中，并返回
+								}
+							通过err判断用户是否存在
+							假如hadp用户存在, uid,gid,home这几个变量就可以设置为docker容器内/etc/passwd的相应值。								
+							如果没找到把这个-u后面传入的值转化为数字，再看看。(这暂时不考虑)
+							if  {
+								ParseGroupFilter
+									...    //一些列工作类似于之前用户的读取，区别仅在于这里读取组，操作文件为/etc/group
+							
+							}
+							
+					
+						syscall.Setgroups
+						syscall.Setgid
+						syscall.Setuid
+				...
+				system.Execv(args[0], args[0:], os.Environ())								//执行用户程序
+				
+																											

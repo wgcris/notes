@@ -1,0 +1,157 @@
+(1) HDFS-9574
+当datanode重启的时候客户端请求会失败。
+由于DataXceiverServer在BP(主要是BPActor)前初始化，客户端请求会一直失败直到datanode注册。
+(譬如，hdfs读文件需要不断地读namenode的信息获取下一个块，这时候需要namenode与datanode正常通信)。
+
+(2) HDFS-9470
+重启NN的时候，根目录加密区域(这是什么?????)没有正确的从fsimage加载。(FSImageFormatPBINode::loadRootINode ,FSImageFormatPBINode类的含义)
+
+(3) HDFS-9445
+当处理一个坏的卷(volume,对应于一个DataNode的存储目录)的时候，DataNode可能死锁。
+
+(4) HDFS-9434
+重新编排(或刷新)一个有500k个块的DataNode可能会暂停NameNode长达30秒。打印过多日志会暂停NN发来的请求。
+这里建议把日志的info等级改为trace
+
+(5) HDFS-9431
+当时用相对路径的时候，DistributedFileSystem的concat会失败。
+
+(6) HDFS-9426
+修改回滚升级中finalization不向后兼容的问题。(需要分析各版本回滚升级的方法和区别?????)
+
+(7) HDFS-9413
+增加StandbyException异常。增加了一个检查的操作，猜测是检查当前节点是否为standby，是则抛出StandbyException异常。
+
+(8) HDFS-9317
+增加 fsc -blockId 和 fsck -storagepolicy文档提示。
+
+(9) HDFS-9305
+NM向RM注册心跳的时候，当其中一个因为某种原因延时的话，接下来会出现一大批心跳一起发过来的状况。
+这是因为计算下一次时间的时候，是根据最开始发送心跳的时间为基点发送的，所以延时造成RM接受大量的心跳请求。
+这里补丁修改为下次心跳从当前时刻加上一个延时时间。
+
+(10) HDFS-9294
+关闭文件的时候DFSClient可能会死锁，无法重新获取新的租约(lease)
+
+(11) HDFS-9290
+DFSClient::callAppend与老版本的NamdeNode不兼容。
+
+(12) HDFS-9289
+该补丁确保block线程安全并验证时间戳。
+
+(13) HDFS-9273
+解决跟路径的ACLs在NameNode重启时丢失的问题。
+
+(14) HDFS-9221
+避免每次调用都要为getState分配一个缓冲空间。这个状态只缓冲一次，以后直接从数组中取。
+
+(15) HDFS-9220
+由于校验的问题，为append操作打开小文件(<512bytes)失败。
+
+(16) HDFS-9178
+datanode的io速度过慢可能会把该节点标记为损毁。
+
+(17) HDFS-9106
+当同步(flush/sync)的时候，一部分块传输失败会引起同步错误，而且没有重试。
+建议不同包的传输延时应该不同。
+传输提供失败重试功能。
+
+(18) HDFS-9083
+一些重复的块违反了块的放置原则。
+发现了一些重复的块放在一个机架上，违反了最初的原则。
+一般创建块的时候，不会出现问题。都是一个节点出错的时候出现问题。
+发现了shouldCheckForEnoughRacks使得后来不再读取和感知网络拓扑。
+
+(19) HDFS-9043
+HDFS Federation文档的更新
+
+(20) HDFS-9042
+Storage policy name文档跟新
+
+(21) HDFS-9033
+dfsadmin -metasave对cache打印NaN的错误
+
+(22) HDFS-8995
+当重连的时候，注册可能会导致DN死掉。因为DN还用这上次注册的信息呢?????
+
+(23) HDFS-8995
+NameNode刷新的时候没有讲不要的DataNode从列表移除。
+
+(24) HDFS-8891
+FSDirConcatOp.verifySrcFiles可能改变src的顺序
+
+(25) HDFS-8879
+在NameNode重启的时候，检查某类型存储器的使用计数限制的时候使用错误
+
+(26) HDFS-8867
+HDFS-7435的补丁。提供DNS的配置调查功能。(需详细看HDFS-7435)
+
+(27) HDFS-8863
+BlockPlacementPolicyDefault的剩余空间检查由缺陷。(待看!!!!!)
+
+(28) HDFS-8852
+HDFS文档更新
+
+(29) HDFS-8850
+假如没有bp要扫描的时候，VolumeScanner线程异常退出。
+没有正确的检验null引用。
+
+(30) HDFS-8846
+增加单元测试
+
+(31) HDFS-8806
+clear的时候corruptReplOneBlocks未重置
+
+(32) HDFS-8767
+对于管道文件FileSystem.listStatus返回一个null而不是文件
+
+(33) HDFS-8722
+关于DataNode小数据文件的写或缓存的优化。
+
+(34) HDFS-8659
+修改部分日志等级从info到debug
+
+(35) HDFS-8656
+保持回滚升级的兼容性
+
+(36) HDFS-8615
+修改文档。
+
+(37) HDFS-8431
+window相关...
+
+(38) HDFS-8384
+假如一些文件由租期但是不在contrusct中，允许NN开启。(?????construct啥意思?????)
+
+(39) HDFS-8219
+父目录改变存储策略(storage policy?)目录下的文件也应该改变，但是重启集群后就补随着改变了。
+
+(40) HDFS-8099
+改变DFSInputStream关闭的日志信息等级为debug
+
+(41) HDFS-8046
+为getContentSummary提供更好的控制。
+HDFS-4995中提到当一个目录由很多目录和文件的时候，将会很长时间持有ns锁。因此提到了解决方案。(具体没有深入，但是猜测是yield中unlock后休眠在lock提高的效率)。
+本补丁对设置了配置选项，对休眠的时间给予用户配置。
+
+(42) HDFS-7725
+有时候集群出现不能从DataNode中申请分配块。会提示节点忙！
+因为HeartbeatManager's nodesInService计算方法不正确。
+
+(43) HDFS-7645
+回滚的时候，垃圾文件夹(remove.tmp?????)没有删除。
+
+(44) HDFS-7609
+因为之前的留下太多的edits,加载edits的时间过程，导致NameNode启动很慢。
+关闭retry cache使加速重启NameNdode。
+针对做了补丁，尚未深入，retry cache是什么?????
+
+(45) HDFS-7314
+当DFSClient不能申请租约的时候，关闭open-for-write文件而不是DFSClient
+
+(46) HDFS-6945
+当一个块移除的时候，BlockManager应该把他从excessReplicateMap移除，同时减少ExcessBlocks块的参数。
+
+(47) 
+
+

@@ -1,0 +1,22 @@
+main.c
+	...
+	set_user			//参数是第一个参数。
+		check_user
+			检查用户。非root用户,UID需要大于最小配置，不再banned列表中。获取到用户信息到user_detail中。
+			检查当前的进程的uid是否为度出来的uid
+			initgroups
+				通过查看/etc/group设置user_detail的组的信息
+			change_effective_user
+				设置当前进程的用户和组。可以知道第一个参数指定的用户就是接下来这个进程的执行用户。
+	然后获取第二个参数到yarn_user_name中
+	然后获取第三个参数command，这个参数用于分辨具体的动作。接下来以SIGNAL_CONTAINER为例子分析:
+	INITIALIZE_CONTAINER分支
+		获取参数...
+		initialize_app
+			initialize_user
+				get_user_directory					//得到用户目录的名字
+				create_directory_for_user		//创建用户目录
+			create_log_dirs
+			open_file_as_nm
+			change_user
+			

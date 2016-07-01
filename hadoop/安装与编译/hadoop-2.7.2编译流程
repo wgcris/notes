@@ -1,0 +1,21 @@
+一 编译hadoop
+﻿(1)安装maven-3.3.9
+(2)安装protobuf-2.5.0
+(3)进入hadoop源码的目录，执行mvn package -Pdist -DskipTests -Dtar
+(4)出现错误
+出现错误后根据提示下载apache-tomcat-6.0.44.tar.gz
+放到/home/zcy/work/hadoop/hadoop-2.7.2-src/hadoop-common-project/hadoop-kms/downloads下
+再放到/home/zcy/work/hadoop/hadoop-2.7.2-src/hadoop-hdfs-project/hadoop-hdfs-httpfs/downloads
+重新运行步骤3
+(5)出现javadoc异常
+之前设置的java的CLASSPATH,在增加同一个环境变量，只是这次都是小写。
+重新运行步骤3
+
+二 将hadoop编译为eclipse工程
+mvn eclipse:eclipse
+
+三 仅仅编译一个模块
+远吗根目录下执行
+mvn install -DskipTests 
+mvn package -Pdist -Psrc -DskipTests -Dtar
+

@@ -1,0 +1,390 @@
+﻿1. TestDockerContainerExcutor
+1.1 setup
+...
+
+	exec = new DockerContainerExecutor();
+
+...
+
+
+1.2 testLaunchContainer
+	shouldRun
+		判断exec是否存在			//在setup中设置exec
+	定义hashMap对象env
+	env[yarn.nodemanager.docker-container-executor.image-name] = "centos"
+	新建文件touchFile
+	得到ContainerId对象cId
+	runAndBlock
+		...
+		exec.activateContainer
+			在ContainerExecutor.pidFiles这个hashMap对象中增加新项目(新项目结构是containerid和path)
+		exec.launchContainer	
+			...
+			
+Configurable [interface]						//仅仅有setConf和getConf方法		
+	ContainerExecutor	
+		DockerContainerExecutor
+
+Container启动的三个过程:
+(1) 本地化
+		环境准备	
+(2) 启动与运行Container
+		(2.1)启动Container
+			
+		
+		
+(3) 资源回收
+
+testContainerLaunchAndStop
+	...   //设置环境
+	加入请求列表到list
+	...
+	ContainerManagerImpl.startContainers(allRequests)		//传入请求，
+	
+ContainerManagerImpl的构造函数
+...	
+		//containersLauncher是一个服务，加入到hadoop的服务列表中
+	  containersLauncher = createContainersLauncher(context, exec);
+    addService(containersLauncher);
+...
+	
+		
+	
+
+Contianer创建
+从NodeManager开始(注: 这里的Nodemanager是NodeManager端的)
+NodeManager
+	containerManager(ContainerManagerImpl类型)，通过startContainers方法(未Override，所以为ContainerManagerImpl->startContainers)
+		startContainers					//主要创建Container队列
+			blockNewContainerRequests.get()						//如果有未处理完的ContainerRequest请求，则退出
+			获取remoteUgi,用户组？
+			nmTokenIdentifier?
+			authorizeUser?
+			创建一个succeededContainers(ArrayList)和failedContainers(HashMap)，集合的内容是ContainerId
+			循环通过request的信息获取Container，放入succeededContainers或failedContainers(
+				{
+					startContainerInternal
+						authorizeStartRequest
+						.
+						.
+						.
+						allocateContainer
+				
+				}
+			创建一个响应返回
+	
+
+附录A
+分析TestContainerManager类
+继承关系
+BaseContainerManagerTest
+	TestContainerManager
+	
+(1) containerManager变量(容器管理器)
+BaseContainerManagerTest.containerManager
+ContainerManagerImpl类型的变量，继承自CompositeService(一个服务？)		，这里暂且认为hadoop-common调度服务的一个实现服务的对象，至于怎么调用暂不考虑？？？？？
+在BaseContainerManagerTest的setup(@before)方法中创建和配置
+
+
+(2)testContainerLaunchAndStop方法
+	containerManager.start()			//开启服务
+	设置scriptFile的名字(名字为)，主要添加后缀
+	设置processStartFile文件(文件名start_file.txt)
+	createContainerId创建容器的ID为cId
+	写入scriptFile脚本文件内容，"umask 0;echo Hello World!;echo $$;exec sleep 100"
+	创建容器登录上下文类containerLaunchContext，然后再设置
+	创建和设置配置信息resource_alpha，rsrc_alpha
+	containerLaunchContext.setLocalResources(localResources)
+	containerLaunchContext.setCommands(commands)		//commands为ArrayList，内容为/bin/bash $(scripts的名字)
+	构造StartContainerRequest请求scRequest
+	将scRequest加入到开始容器请求的列表list中,并构造到StartContainersRequest对象中			//注意这个对象与之前的请求对象的名字紧紧在Container后加一个s
+	containerManager.startContainers(allRequests)
+	{
+		//blockNewContainerRequests分析
+		blockNewContainerRequests.get()			//判断是否阻塞
+		得到用户组信息remoteUgi
+		selectNMTokenIdentifier(remoteUgi)	//获取remoteUgi的NMTokenIdentifier(这个类是？)信息
+		authorizeUser												//验证用户
+		创建一个成功容器集合(List)和失败容器集合(Map)
+		for			//遍历传入的startContainersRequest
+		{
+			//认证用户相关，？？？？？待看
+			获取容器ID，containerId
+			startContainerInternal			//
+			{
+				authorizeStartRequest			//成功加入列表
+				getRMIdentifier,然后验证，？？？？？猜测是检查当前的RM的ID和请求中的RM的ID是否一致
+				updateNMTokenIdentifier			//？？？？？
+				记录日志消息
+				serviceData检查							//？？？？？
+				分析得到证书credentials
+				将containerId和container一起加入到containerManager的上下文context中
+				创建一个应用程序
+				将应用加入到context.getApplications()中，如果之前没有的话，就创建应用
+					{
+					具体怎么做的?
+					}
+				this.context.getNMStateStore().storeContainer(containerId, request);
+				dispatcher.getEventHandler().handle,实际调用了GenericEventHandler->handle,实际上把event加入到某队列(?????)中了,加入的event为ApplicationContainerInitEvent
+					备注: 加入AsyncDispatcher类的eventQueue变量中，
+					在createThread方法中有创建一个线程，在队列中依次取出队列，然后调用dispatch分发event，
+					根据类型找到对应的EventHandler，然后执行handle处理
+						<
+						在ContainerManagerImpl构造函数中有如下的定义，因此这个分发类已经注册了如下服务
+							dispatcher.register(ContainerEventType.class,new ContainerEventDispatcher());
+	    				dispatcher.register(ApplicationEventType.class,new ApplicationEventDispatcher());
+					    dispatcher.register(LocalizationEventType.class, rsrcLocalizationSrvc);
+					    dispatcher.register(AuxServicesEventType.class, auxiliaryServices);
+					    dispatcher.register(ContainersMonitorEventType.class, containersMonitor);
+					    dispatcher.register(ContainersLauncherEventType.class, containersLauncher);
+						>
+					这里仅仅分析ApplicationContainerInitEvent的过程
+						会调用ApplicationEventDispatcher的handle函数
+							然后调用app.handle(event); 之前的app已经实例化为ApplicationImpl，所以调用了ApplicationImpl.handle,实质调用了状态机处理状态
+							可以看到状态机有状态机工厂得到，ApplicationImpl.java的132行开始，有构造该工厂的处理函数，这里注册很多处理类(AppInitTransition，InitContainerTransition等)						
+				
+				this.context.getContainerTokenSecretManager().startContainerSuccessful(containerTokenIdentifier);						// 考虑启动Conatiner的信息，防止重新打开
+				launchedContainer						//增加引用此时
+				allocateContainer						//记录分配的空间
+			}
+			成功加入到succeededContainers中，失败加入failedContainers中
+			
+			
+		}
+	
+	
+	}
+	... 一系列Assert操作	
+	
+附录B
+根据A.2的分析，可以猜测处理Container的函数在ContainerImpl中。
+因此这里分析如下类:
+(1)
+RequestResourcesTransition
+ContainerDiagnosticsUpdateTransition
+KillOnNewTransition
+LocalizedTransition
+ResourceFailedTransition
+KillDuringLocalizationTransition
+...
+
+(2)这里紧紧分析状态由ContainerState.LOCALIZED到ContainerState.RUNNING的类型，且事件类型为ContainerEventType.CONTAINER_LAUNCHED的情况
+LaunchTransition
+	transition
+		发给monitor状态
+		增加引用计数
+		计算时间
+... ？？？？？
+接下来怎么考虑
+
+
+附录C 服务与事件的分析
+(1) 服务的使用流程，从CompositeService这个最顶层的类分析
+	addService注册流程
+		将一系列服务注册到serviceList中，这一系列服务可以为AsyncDispatcher类型，并且将event和handler主粗额到AsyncDispatcher的对象中
+	init -> ServiceInit初始化
+	start -> ServiceStart开始服务
+		会依次遍历serviceList列表，执行service的serviceStart函数，实质是AsyncDispatcher的serviceStart
+			具体会创建新线程，新线程循环获取事件队列，如果有事件的到来就根据事件类型分发任务，具体的分发是之前注册到serviceList中AsyncDispatcher类型中注册的事件和处理器。
+			
+
+附录D ContainersLauncher分析
+	ContainersLauncher继承于AbstractService，所以可以认为他之前已经注册到ContainerManangerImpl(继承自CompositeService)中，其中ContainerManangerImpl又被注册到NodeManager中，这里不过多分析了。
+			//注意:    ContainerManangerImpl的构造函数中有这样的注册语句: dispatcher.register(ContainersLauncherEventType.class, containersLauncher);
+	而且在ContainerManangerImpl的构造函数中已经增加了ContainersLauncher相关的时间类型和分发类。
+	接下来分析AsyncDispatcher
+	AsyncDispatcher被注册后，当有ContainersLauncherEventType事件到来就执行相应类的ContainersLauncher的handle方法
+	接下来分析handle方法
+	handle						//这里的switch仅仅分析LAUNCH_CONTAINER
+		获取应用对象app
+		创建一个ContainerLaunch对象launch					
+		containerLauncher.submit(launch);		//得到containerLauncher对象的submit
+			containerLauncher的类型为ThreadPoolExecutor，是调用的是其父类AbstractExecutorService的submit方法
+			AbstractExecutorService::submit
+				//这里会在线程池中创建一个新线程，具体执行为ContainerLaunch的call方法
+		running.put(containerId, launch);		//放入map
+		
+...
+
+	这里调用到ContainerLaunch.call，因此分析一下
+	call
+		//检查状态？？？？？
+		判断是否获取到资源
+		获取用户名字user
+		会将command加入到newCmds中,并写回launchContext中,实质上就是将占位符替换了						//????? 注: command = launchContext.getCommands() ， 待会需要分析launchContext的commands是如何设置的	
+		对launchContext.getEnvironment执行同样操作
+		然后获取localFS的上下文对象，lfs
+		获取一些路径nmPrivateContainerScriptPath，nmPrivateTokensPath，nmPrivateClasspathJarDir，containerWorkDir
+		判断硬盘是否正常？？？？？
+		得到用户主目录，具体用户的目录，应用目录
+		创建文件containerScriptOutStream
+		设置token cache file的缓冲目录
+		sanitizeEnv
+			把端口号，主机名等一些参数加载到environment中
+			将YarnConfiguration的一些设置配置到environment中
+			最后把getAuxServiceMetaData里面的一些变量配置到environment
+		writeLaunchEnv					//这里需要注意的是对于DefaultContainerExecutor和LinuxContainerExecutor执行其父类ContainerExecutor的方法,DockerContainerExecutor自己覆盖的方法
+			分支1:				ContainerExecutor分支
+				创建shell脚本构造器对象sb，实际的类型为UnixShellScriptBuilder
+				将所有的环境变量写入到sb中    实际写入的是UNIX中设置环境变量的语句，即export "环境变量名称" = "具体的环境变量值"
+				然后给environment.entrySet记录的路径创建连接文件
+				sb.command					//使用bash执行shell指令，执行的是launchContext.getCommands的指令,具体是啥？
+				sb.write						//将脚本的内容分写入到文件中，根据参数传递实质是containerScriptOutStream表示的文件
+			分支2：				DockerContainerExecutor分支
+				创建HashSet对象，并将一下变量写入其中
+					创建shell脚本构造器对象sb，实际的类型为UnixShellScriptBuilder					
+					YarnConfiguration的yarn.nodemanager.docker-container-executor.image-name(选用Docker的名称, 配置文件中？？？？？)
+					HADOOP_YARN_HOME环境变量
+					HADOOP_COMMON_HOME环境变量
+					HADOOP_HDFS_HOME环境变量
+					HADOOP_CONF_DIR环境变量
+					JAVA_HOME环境变量
+				将所有的环境变量写入到sb中    实际写入的是UNIX中设置环境变量的语句，即export "环境变量名称" = "具体的环境变量值",这里与之前不同的是调用的exclusionSet
+				然后给environment.entrySet记录的路径创建连接文件
+				sb.command					//使用bash执行shell指令，执行的是launchContext.getCommands的指令,具体是啥？
+				sb.write						//将脚本的内容分写入到文件中，根据参数传递实质是containerScriptOutStream表示的文件
+		证书相关，暂时不考虑
+		发送container is launched消息
+		存储launched的container的名字
+		activateContainer				//无论哪个子类都没有覆盖该方法，执行ContainerExecutor的方法
+			把记录进程ID的路径写入到pidFiles中
+		launchContainer					//ContainerExecutor没有实现该方法需要看具体子类
+			分支1:								DockerContainerExecutor分支
+				设置containerImageName变量为docker镜像名
+				去除containerImageName名字中的单引号和双引号
+				检查docker名称
+				获取docker执行器的名称，由yarn.nodemanager.docker-container-executor.exec-name设置，如果不设置默认为/usr/bin/docker
+				创建目录结构$(users)/$(user)/$(appcache)/$(app)/$(container)
+				创建日志dir, 临时文件dir
+				将启动脚本拷贝到$(workdir)/launch_container中
+				拷贝容器的token(这里的token指的是啥)到工作目录
+				创建commandStr为docker的启动参数，明显为docker的启动脚本
+				创建dockerPidScript，明显为查询进程ID的脚本
+				创建UnixLocalWrapperScriptBuilder脚本构造器sb
+				sb.writeLocalWrapperScript(launchDst, pidFile);		launchDst为$(工作目录)/launch_container  launchDst为pidFile
+					UnixLocalWrapperScriptBuilder::writeSessionScript	
+						将脚本的内容写到sessionScriptPath文件中，内容如下
+							创建脚本，将docker的进程id写入到进程文件中，
+							写入启动docker的命令
+							创建docker名
+					LocalWrapperScriptBuilder::writeLocalWrapperScript
+						UnixLocalWrapperScriptBuilder::writeLocalWrapperScript(三个参数)
+							将shell脚本到PrintStream(终端是wrapperScriptPath表示的文件)中,内容如下
+								执行sessionScriptPath脚本，
+								获取上一条命令返回值到rc，这个rc实质上是docker容器返回的id值
+								将返回值写入到exitCodeFile文件中
+								然后返回rc
+				构造ShellCommandExecutor对象shExec
+				shExec.execute();					//创建新线程执行文件，使用Java的ProcessBuilder操作
+			分支2:								//DefaultContainerExecutor分支
+				.
+				.
+				.					//创建一些目录文件等,拷贝Token文件，脚本文件等到指定目录，创建新的本地登录脚本，写入进程ID文件
+				writeLocalWrapperScript
+					同理writeSessionScript和writeLocalWrapperScript和两端脚本
+						writeSessionScript也是写进程ID，docker启动，然后/bin/bash执行launchDst
+						writeLocalWrapperScript同上
+						//注: 这里仅仅是writeSessionScript的执行语句不同，这个文件的内容在writeLaunchEnv中写入,而具体的命令是container.getLaunchContext().getCommands()运行而来
+						//重要的是command是如何传入的				？？？？？因为猜测该方法可能是MR类型的程序的使用方法，这里咱不分析如何传入				
+				执行脚本	//
+				
+				
+附录D:
+这里分析如何根据设置选着不同的容器
+NodeManager.java中的212行有构造exec的代码，其中yarn.nodemanager.container-executor.class指定类名称通过反射构造exec对象
+然后这个exec对象通过NodeManager的containerManagerImpl传递，在通过containersLauncher传递给，在通过其中的handle方法的ContainerLaunch传递exec对象
+
+因此：综合上面可以知道通过配置
+					yarn.nodemanager.container-executor.class设置为"DockerContainerExecutor"																				NM_CONTAINER_EXECUTOR
+					yarn.nodemanager.docker-container-executor.image-name设置为指定的的镜像名字																			NM_DOCKER_CONTAINER_EXECUTOR_IMAGE_NAME
+					yarn.nodemanager.docker-container-executor.exec-name设置为docker二进制文件的路径，不填写为/usr/bin/docker				NM_DOCKER_CONTAINER_EXECUTOR_EXEC_NAME
+
+接下来就应该研究如何使用yarn-client启动这个容器, 即通过client发送一个Launch_Container命令
+
+附录E:
+使用docker容器的时候，开启容器的命令如下:
+/usr/bin/docker run --rm --net=host --name $(containerIdStr) -v $(localDirs):$(localDirs) -v $(logDirs):$(logDirs) /
+	-v $(containerWorkDirMount):$(containerWorkDirMount) $(镜像名称)
+	
+	command原始代码
+    String commandStr = commands.append(dockerExecutor)
+        .append(" ")
+        .append("run")
+        .append(" ")
+        .append("--rm --net=host")
+        .append(" ")
+        .append(" --name " + containerIdStr)
+        .append(localDirMount)
+        .append(logDirMount)
+        .append(containerWorkDirMount)
+        .append(" ")
+        .append(containerImageName)
+        .toString();
+        
+        
+/usr/bin/docker run --rm --net=host --name test1 zcy/presto_all
+
+
+
+
+附录E
+RMAppAttemptImpl生成一个AppMaster的过程
+
+RMAppAttemptImpl:launchAttempt函数中会处理AMLauncherEventType.LAUNCH事件，会开启AppMaster
+	eventHandler.handle(new AMLauncherEvent(AMLauncherEventType.LAUNCH, this));
+需要分析enventHandler的具体内容
+	构造函数有如下定义:
+		this.eventHandler = rmContext.getDispatcher().getEventHandler();
+	rmContext源自于传入参数，RMAppAttemptImpl由RMAppImpl构造，再由RMAppImpl够着函数传入的rmContext获得
+	其中ResourceManager的rmAppManager用户管理RMAppImpl
+	因此可以查到rmContext的传递路径是	ResourceManager->RMAppManager->RMAppImpl->RMAppAttemptImpl
+	在ResourceManager中有语句: 
+		rmContext.setDispatcher(rmDispatcher);
+	同时ResourceManager::serviceInit也有语句
+		rmDispatcher.register(RMAppAttemptEventType.class,new ApplicationAttemptEventDispatcher(rmContext));
+	同时又语句
+	  rmDispatcher.register(AMLauncherEventType.class,applicationMasterLauncher);
+
+因此，可以知道会调用LauncherThread::handle函数，具体执行ApplicationMasterLauncher::launch
+	ApplicationMasterLauncher::launch
+		createRunnableLauncher						//创造一个runnable对象，会在调度进程中取出队列执行run方法,因此操作为AMLauncher的run方法
+		masterEvents.add(launcher)				//加入执行队列，待执行
+
+
+附录 F
+关于AM向RM注册失败的分析
+
+(1) 服务端的猜测
+AM发送注册请求，由RM的ApplicationMasterService处理，因此分析ApplicationMasterService:registerApplicationMaster函数
+
+(2) 客户端的调用与转发
+AMRMClientAsyncImpl::registerApplicationMaster   
+			--->  AMRMClientAsync.AMRMClient.registerApplicationMaster
+					----> AMRMClientImpl.registerApplicationMaster(*,*.*)
+							----> AMRMClientImpl.registerApplicationMaster
+									ApplicationMasterProtocol.registerApplicationMaster
+							
+LOG.warn("AMRMClientImpl: appHostname="+appHostname+"appHostPort="+appHostPort+"appTrackUrl="+appTrackUrl+"!!!!!!!!!!!!");
+
+附录G
+关于YARN启动的流程中关于ContainerExecutor对象传递的分析
+
+
+
+
+
+﻿附录H 
+startLocalizer
+(1) 参数dirHandler
+dirsHandler来自于NodeManager的构造函数中的定义:dirsHandler = nodeHealthChecker.getDiskHandler();
+实质为LocalDirsHandlerService对象
+(2)
+DirectoryCollection对象设置了目录，最大硬盘百分比配置以及最小容量配置
+目录由yarn.nodemanager.local-dirs设置
+最大百分比由yarn.nodemanager.disk-health-checker.max-disk-utilization-per-disk-percentage设置，默认为90%
+最小容量由yarn.nodemanager.disk-health-checker.min-free-space-per-disk-mb设置，默认为0MB
+
+
+
+
+
