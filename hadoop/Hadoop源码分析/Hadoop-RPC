@@ -1,0 +1,11 @@
+本文主要分析org.apache.hadoop.fs.FsShell的机制。
+以hdfs的rename为例子说明RPC的过程。
+
+(1) 提交rename的方式
+hdfs dfs mv ${old_name} ${new_name}
+实际调用了org.apache.hadoop.fs.FsShell
+
+
+
+
+
