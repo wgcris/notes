@@ -1,0 +1,10 @@
+本文介绍了同步一个远程仓库,其中本地仓库fork于远程仓库。
+
+(1) 查看是否有远程仓库的上载流，没有的话，执行(2)
+	git remote -v
+(2) 创建连接于远程仓库的upstream
+	git remote add upstream https://github.com/otheruser/repo.git
+(3) 进入要同步的分支
+	git checkout master
+(4) 同步分支
+	git pull upstream master
