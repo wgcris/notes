@@ -1,0 +1,47 @@
+linux进程调度的分析
+内核版本: linux3.10
+
+我们知道中断会一些其他部分函数会主动调用调度函数，实现进程调度。具体实现调度的函数是__schedule，从该函数说起。
+__schedule
+	preempt_disable							//关闭抢占
+	smp_processor_id						//选择当前cpu
+	获取当前cpu的rq队列
+	rcu_note_context_switch			//切换上下文相关
+	保存当前运行的任务到prev
+	...
+	pre_schedule								//对于使用fair调度器的task并没有执行任何操作
+	idle_balance								//假如当前的cpu没有task，就从其他cpu上获取。
+	put_prev_task								
+
+
+时钟中断周期性调度
+scheduler_tick
+	获取当前任务的对象curr
+	....
+	task_tick_fair
+		for_each_sched_entity			//遍历当前进程以及父进程
+			entity_tick							//传入参数为cfs_rq,se,0。cfs_rq是当前task所属cfs队列，se是当前task对应的sched_entity
+				dequeue_entity
+				enqueue_entity				
+				...
+可以看出上面的有入队列和出队列的过程。更新一个队列，首先是把当前
+这里其实入队和出队操作之前都调用update_curr更新了事件。其实，主要关心的是入队列排序的参数是什么。可以看出实际上是vruntime作为传递的参数。
+
+
+CFS调度器参考资料: 
+http://www.ibm.com/developerworks/cn/linux/l-cn-scheduler
+
+update_curr
+	...
+	account_cfs_rq_runtime  			//传入的是当前cgroup当前cpu对应的cfs_rq和delta_exec(当前task刚刚消耗的时间)
+		判断是否使用带宽控制
+		__account_cfs_rq_runtime
+			更新cfs_rq->runtime_remaining,cfs_rq为该cgroup组在该cpu下对应的结构体。减去的delta_exec
+			expire_cfs_rq_runtime			//?????目的
+			假如runtime_remaining>0表明，当前cgroup还可以继续运行。
+			assign_cfs_rq_runtime			//没有详细看，猜测大概意思是:runtime_remaining这里重新给该cgroup分配runtime_remaining，如果没有分配到则执行resched_task调度任务。
+			resched_task 							//设置TIF_NEED_RESCHED，立即触发调度
+
+
+
+

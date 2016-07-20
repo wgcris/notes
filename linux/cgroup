@@ -1,0 +1,182 @@
+本文以分析linux-3.10关于cgroup的bug为目的。
+更新/sys/fs/cgroup/cpu,cpuacct/cpu.shares会通过一些列调用，执行cpu_shares_write_u64，因此从这里开始分析。
+
+用户空间会是用write函数会使用系统调用进入内核空间调用sys_write,然后调用VFS层的函数vfs_write,最后根据cgroup文件系统的file_operations调用其write方法。
+cgroup文件系统的file_operations对象为cgroup_file_operations，因此具体的执行的方法为cgroup.c中的cgroup_file_write函数。下面从cgroup_file_write函数开始分析.
+
+cgroup_file_write
+	__d_cft				//获取cftype对象cfg，通过该文件的目录项目获取其cgroup目录项(cfent),然后获取其type. 注意cpu_files，是一个cfent的数组，是cpu目录下的一组文件。
+	__d_cgrp			//获取父目录的cgroup对象cgrp。 即cpu.shares这个文件所在目录对应的cgroup
+	判断cft是否存在write,write_u64,write_s64,write_string，trigger指针，如果有执行对应函数。		注意:对于cpu相关的cgroup，具体的函数指针在core.c中的cpu_files中确定。
+	对于shares,cfs_quota_us,cfs_period_us会及in如cfs->write_u64分支，执行cgroup_write_X64
+		cgroup_write_X64			//传入参数cgrp为文件对应的cftype(用于区别具体文件内容，对具体的shares或cfs_period_us执行具体的操作)结构体，cgrp为文件所在文件夹对应的cgroup结构体。以后为写入的参数。
+			从用户空间把传入参数拷贝进来，然后转化为u64格式，调用cft->write_u64。
+				这里分头说明，如果是写入cpu.shares文件，写文件会执行cpu_shares_write_u64
+				如果是cpu.cfs_quota_us文件，写文件会执行cpu_cfs_quota_write_s64
+				如果是cpu.cfs_period_us文件，写文件会执行cpu_cfs_period_write_u64				//注意cfs_quota_us，cfs_period_us，stat同属于CONFIG_CFS_BANDWIDTH
+				注意，传入参数分别为cgrp，cft，val(要写入的值)，实际上这里cft已经没用了，因为已经找到了对应的方法。
+
+
+下面分别分析cpu_cfs_quota_write_s64和cpu_cfs_period_write_u64
+cpu_cfs_quota_write_s64
+	cgroup_tg(cgrp)					//通过cgroup找到cgroup_subsys_state对象，在只找到对应的cgroup_subsys_state。注:猜测这里按时了cgroup与其对应的task_cgroup有同样的css*数组，所以可以通过cgroup找到task_cgroup
+	tg_set_cfs_quota				//传入cgroup_tg得到的对象，就是当前cgroup对应的task_cgroup对象。
+		ktime_to_ns						//讲period值转化为ns为单位的period
+		将quota值转化为ns为单位
+		tg_set_cfs_bandwidth	//注:这里传入的period是这个task_group对象记录的，quota是传入的只。
+			如果是根节点就返回EINVAL，说明各个子系统的根节点不可以写。
+			检查quota的，不在正确范围就返回。范围是1000000L~1000000000L,即1ms~1s
+			检查周期，周期需要大于1000000000L(即1s)会返回错误。
+			__cfs_schedulable		
+				构造cfs_schedulable_data对象data，使用传入的task_group，period，quota参数构造。
+				然后将data.period和data.quota的单位转化为ms(原来为ns)
+				walk_tg_tree		//传入第一个参数tg_cfs_schedulable_down，附录中介绍。第二个参数tg_nop可以忽略。第三个参数data。
+					walk_tg_tree_from			//暂时不详细分析，猜测是一个从根节点开始向下遍历，目的是保证参数设置合理。
+			获取runtime_enabled和runtime_was_enabled变量。这里判断限制功能(内核里叫rutime)是否打开，并记录原来是否打开。判断依据为quota是否为RUNTIME_INF
+			假如第一打开runtime功能
+				cfs_bandwidth_usage_inc			//		这个是进入了bandwidth模式的标志
+			使用传入的quota和period更新当前cgroup节点quota和period的值
+			__refill_cfs_bandwidth_runtime
+				重置cfs_b->runtime和runtime_expires的值，其中rutime设置为quota，runtime_expires设置为当前时间+cfs_b->period(单位是ns)
+			如果runtime_enable使能，开启了timer_active
+				暂时关闭timer_active
+				__start_cfs_bandwidth
+					...			//一些工作等待定时器可用，暂时不分析
+					设置cfs_b->timer_active为1
+					start_bandwidth_timer				//开启定时器，传入了cfs_b->period_timer,cfs_b->period。其中period_timer有执行事件，之后需要关心该变量如何设置?????
+						...		//暂时略
+			遍历各个cpu
+				获取当前cgroup节点下当前cpu对应的cfs_rq队列，然后获取其rq队列(cfs_rq是依附于这个rq上的)
+				设置cfs_rq->runtime_enable,rutime_remaining
+				假如设置了cfs_rq->throttled 					
+					unthrottle_cfs_rq								//刚开始，所以remaining必须>0,所以unthrottle
+						...
+							有一步骤调用了tg_unthrottle_up，这里说明了把所有之前throttle的task去掉。  throttle根据论文的意思就是bandwidth在一次周期达到运行时间之后不再运行的时间。
+						...
+
+			然后假如runtime_enable功能从开启到关闭，会调用cfs_bandwidth_usage_dec。			//这里用于记录是否开启了bandwidth功能。
+
+关于period的设置与quota类似，这里不再重复，下面分析shares文件的设置
+
+cpu_shares_write_u64
+	sched_group_set_shares			//参数分别为cgroup_tg(cgrp), scale_load(shareval)。前面返回cgroup所属的task_group，后者直接返回shareval，即share值
+		如果为得到的task_group是根目录，就不再设置
+		clamp						//保证传入的shares在正常范围内
+		依次遍历各个cpu
+			得到各个cpu的rq队列rq
+			得到当前task_group下当前cpu的sched_entity队列se
+			遍历各个sched_entity
+				update_cfs_shares						//依次更新调用update_cfs_shares更新shares
+					获取cfs_rq所属的task_group对象tg
+					获取该task_group下属的当前cpu的sched_entity对象se
+					如果se为null,且开启了bandwidth功能，且cfs_rq这个队列不处于throttle状态，就立即返回。
+					calc_cfs_shares
+						calc_tg_weight
+						reweight_entity
+							...
+							update_load_set				//更新se->load供调度使用
+							...
+
+
+update_curr			//该函数会周期调度或其他事件触发调度
+	计算当前task的运行时间自从上一次改变其load值起，得到时间为delta_exec
+	__update_curr
+		更新总运行事件sum_exec_runtime
+		更新cfs_rq->exec_clock为原来值+delta_exec
+		calc_delta_fair				//得到计算权重的delta		
+		更新最新的vruntime			//vruntime += delta_exec * (NICE_0_LOAD/curr->load.weight)
+		update_min_vruntime		//更新集群最小的min_vruntime
+	更新当前task的exec_start为当前值
+	假如curr是一个任务，也就是以为这有益一个cfs_rq与其对应
+		根据curr获取当前的task_struct对象curtask
+		trace_sched_stat_runtime
+			cpuacct_charge
+		account_group_exec_runtime
+	account_cfs_rq_runtime
+		假如没有开启调度器功能或runtime_enabled没有开启，就返回。
+		__account_cfs_rq_runtime
+			减少cfs_rq->runtime_remaining，这表示要运行的事件减少掉刚才运行的部分。
+			expire_cfs_rq_runtime					//判断超时
+			assign_cfs_rq_runtime
+
+			resched_task
+
+
+
+
+会更新sched_entity的虚拟运行时间(根据权重,shares值调整的虚拟运行时间)
+
+
+fair调度器选择下一个调度进程的函数是pick_next_task_fair
+pick_next_task_fair
+	假如没有cfs_rq没有进程，就直接退出。
+	pick_next_entity
+		pick_next_entity
+
+
+入队出队列会检查runtime_remaining是否小于0，小于0就会调用
+throttle_cfs_rq
+	获取cgroup下面所有sched_entity列表
+	walk_tg_tree_from		//遍历目录树，执行tg_throttle_down
+		tg_throttle_down
+	for_each_sched_entity
+		从当前的se遍历向父亲节点不断遍历，逐渐的讲自己及父亲节点从运行队列中移除。
+	__start_cfs_bandwidth		//开启定时器，估计是为了重新入队列		
+
+cfs_bandwidth的初始化
+init_cfs_bandwidth
+	...
+	讲定时器执行函数设置为sched_cfs_period_timer，每隔一段时间执行
+	sched_cfs_period_timer
+		do_sched_cfs_period_timer
+			distribute_cfs_runtime
+				unthrottle_cfs_rq
+					walk_tg_tree_from				//遍历目录树执行tg_unthrottle_up
+					遍历se，不断压入运行队列
+附录:
+(1) 结构体说明
+cgroup_subsys_state	表示一个子系统
+cftype(用于区别具体文件内容，对具体的shares或cfs_period_us执行具体的操作)
+cgroup				表示一个子系统下面的某个cgroup组，具体对应某子系统下面的某个目录(/sys/fs/cgroup/cpu,cpuacct/test)
+task_group		对应于cgroup，用于组调度的控制。
+(2) cgroup_tg
+cgroup_tg
+	container_of(cgroup_subsys_state(cgrp, cpu_cgroup_subsys_id),struct task_group, css)
+	这个函数最后返回传入的cgroup对应的task_group
+	其中, cgroup_subsys_state(cgrp, cpu_cgroup_subsys_id)函数根据cgroup结构体获取和子系统id获取对应的cpu子系统。(注:cgroup结构体会记录所有子系统的地址)
+			  cpu_cgroup_subsys_id是通过SUBSYS(cpu_cgroup)这个宏定义获取的。
+(3) tg_cfs_schedulable_down
+该函数被walk_tg_tree调用，会从根节点开始遍历一个子系统下面的所有节点执行该函数
+tg_cfs_schedulable_down				
+	假如是根节点，就直接返回RUNTIME_INF，即64位最大整数。
+	获取父节点的cfs_bandwidth对象的指针
+	normalize_cfs_quota																			//为了后续验证子节点的资源不大于父节点，这里使标准统一
+		规范化quota，这里如果是-1也被表示为64位最大整数。
+		最后返回(ratio<<20)/period，返回个当前节点的quota。				//实质对应物理的意义就是占有几个cpu，使各个节点period不同的情况下也有统一标准。左移20为，应该是为了提高精度。
+	获取父节点的hierarchal_quota值parent_quota			//????? hierarchal_quota与quota的区别，猜测是所有子目录的总量 ?????
+	确保当前的quota不大于parent_quota，如果当前节点是RUNTIME_INF(表示最大)，则将当前节点的值设置为最大
+	这里赋值当前节点的hierarchal_quota为quota				
+综上: 总结，当前节点的quota不得大于父节点。如果当前节点的quota为64位最大整数或-1，则设置为最大的值。
+		 hierarchal_quota应该为一种度量，记录当前节点的quota，起到约束所有子节点的作用。另外这里设置hierarchal_quota的quota，设置是quota/period，是一个规范化后的值，这可以代表对应的cpu核心数目（但是考虑左移20位的目的）。
+
+(4)
+然后分析一下tasks文件的写入				/sys/fs/cgroup/cpu,cpuacct/tasks
+关于cgroup的tasks文件，会调用cgroup.c中的files的.write_u64指向的函数，即调用cgroup_tasks_write
+cgroup_tasks_write
+	attach_task_by_pid
+		获取一些pid对应的task_struct对象tsk
+		...		//一些检查工作，暂时略
+		cgroup_attach_task
+			....
+				会调用cpu_cgroup_attach执行具体工作
+
+(5)
+然后分析一下创建一个cgroup的过程，譬如在/sys/fs/cgroup/cpu,cpuacct/下创建一个test1文件夹
+这主要是目录的操作，猜测最终会调用cgroup_mkdir
+cgroup_mkdir
+	cgroup_create			//传入分别是父目录对应的cgroup, 要创建文件夹对应的dentry,权限
+		分配一个cgroup结构体cgrp
+		给cgrp分配一个名称，根据dentry设置
+		...							//设置一系列参数...
+		ss->css_alloc 	//这里是分配了对应的task_group,实际调用了cpu_cgroup_css_alloc	，这里会调用init_cfs_bandwidth来设置cfs_bandwidth字段
+		...
