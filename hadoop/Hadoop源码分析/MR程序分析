@@ -29,7 +29,10 @@ WordCount::main
 			构造submitter
 			submitter.submitJobInternal		//使用当前用户(即客户端的用户)提交job
 				checkSpecs
-				
+				获取配置conf
+				addMRFrameworkToDistributedCache
+
+
 
 				设置jobStagingArea							//最终会调用YarnRunner::getStagingAreaDir => ResourceMgrDelegate::getStagingAreaDir => MRApps::getStagingAreaDir, 然后访问yarn.app.mapreduce.am.staging-dir, 线上集群设置为/user。所以最后为/user/${user}/.staging
 				...				
