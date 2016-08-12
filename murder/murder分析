@@ -1,0 +1,224 @@
+1. murder_make_torrent.py分析
+使用方法：
+	python murder_make_torrent.py <file> <trackerhost:port> <target>
+	其中,file是要下载的文件，trackerhost:port是要加载的ip和端口，target是制作的种子文件。	
+	例如: python murder_make_torrent.py ~/hadoop-hdfs-2.7.1.jar 127.0.0.1:9876 hadoop-hdfs-2.7.1.jar.torrent http://172.18.149.181:8998/announce,http://172.18.149.182:8998/announce
+
+源码分析:
+murder_make_torrent.py
+	构造dict型对象params,并设置params["target"]为种子的名称。
+	make_meta_file				//传入的参数分别为文件名称，tracker的端口号和地址，params(dic类型)传入了种子文件的名称。
+		设置piece_len_exp		//根据params是否设置了piece_size_pow2,没有设置使用了默认的18，猜测是文件分块的大小
+		设置种子文件的名称f		
+		calcsize						//计算要下载文件的大小,并根据大小设置piece_len_exp
+		piece_length				//得到一个piece的大小。2^piece_len_exp
+		设置编码格式encoding	//根据传入params的"filesystem_encodin				g"设置，如果没有设置使用ENCODING，即获取系统默认的编码格式，centos和ubuntu均为'UTF-8'，在没有的话，使用'ascii'
+		makeinfo						//其中,process为空
+			这里先看else的内容，即做种的是文件而不是目录
+				按照piece大小不断那得读文件，然后计算sha值，然后写入到pieces中。
+				返回一个dic。其中，pieces是一组sha值连接的字符串(没有分隔符)，piece_lenghs是分片piece大小,length是文件大小,name是不包括路径的UTF-8格式的文件名
+			如果是目录
+				仅仅是length改为了files，files记录了目录及其下面的所有文件。
+		check_info					//检查info
+		使用info还有url和当前事件构造data
+		comment,real_announce_list,announce_list,real_httpseeds,httpseeds没有设置，略
+		h.write 						//写入种子文件
+
+种子文件分析:
+	以一个小文件分析:
+	python murder_make_torrent.py a 127.0.0.1:9876 a.torrent
+	得到种子文件内容:
+	d8:announce30:http://127.0.0.1:9876/announce13:creation datei1469779268e4:infod6:lengthi6e4:name1:a12:piece lengthi262144e6:pieces20:^]"<92>q<92><8d>?<9e>+°7[ÖÎ]¶ÆÓHÙee
+
+2. tracker分析
+使用方法:
+	python murder_tracker.py --multitracker_enabled 1 --allowed_dir /data3/download_image/multi > murder_tracker.log 2>&1 &
+	python murder_tracker.py > murder_tracker.log 2>&1 &
+源码分析
+murder_tracker.py
+	设置参数--dfile data, --port 8998
+	track
+		parseargs					//得到config，files。其中config为配置参数，使用defaults作为默认值，并修改传入的参数dfile,port。files为没有--的参数，这里没有使用。
+		r=RawServer				//构造RawServer
+			设置一些变量
+			设置sockethandler,为SocketHandler对象
+			self.add_task		//增加一个延时相关的任务，暂不详细分析
+		t=Tracker 				//构造tracher，传入了配置和RawServer对象
+			配置参数
+			查看是否有dfile这个文件，有的话读取文件然后解码得到tempstate
+			设置downloads，completed字段
+			遍历downloads.items				//从dfile文件读出来的
+				判断如果在禁止ip列表中或不允许ip，则删除该下载项ds
+				...
+			遍历downloads.keys
+				构造times字段，用于记录?????
+			设置trackerid字段
+			seed(trackerid)			//用于生成随机数
+			...
+			rawserver.add_task(self.save_state, self.save_dfile_interval)										//用于保存dfile，执行函数save_data，会不断讲state字段保存到dfile文件中
+			rawserver.add_task(self.expire_downloaders, self.timeout_downloaders_interval)	//猜测是如果时间长times字段对应的下载项目不更新，就会从time移除该下载项
+			如果设置hupmonitor，会重新绑定SIGHUP的处理函数，具体的操作是重新打开self.log							//终端关闭会向所有的终端启动的进程发送SIGHUP信号，这些进程默认操作关闭进程。使用signal.signal可以重新注册SIGHUP处理函数。
+			...
+			cachetimeupdate			//更新事件
+		r.bind
+			绑定端口
+		r.listen_forever			//传入参数为HTTPHandler(处理函数为tracker.py中的get函数)
+			设置handler
+			进入while循环
+				pop_external			//查看是由新的任务需要添加
+				_kill_tasks				//kill_tasks函数会设置tasks_to_kill字段，对所有在tasks_to_kill列表的任务从RawServer.funcs字段中删除
+				计算period					//设置是track.py中的timeout_check_interval，会不断的重设。
+				sockethandler.do_poll		//读取事件r并返回。如果没到，可能是超时了，就随机关掉了5%的socket
+				检查是否超时，如果超时了。
+					从funcs中pop出来一个函数。
+						self.sockethandler.close_dead()
+						self.sockethandler.handle_events(events)
+					 		分两个流程处理工作:(1) 处理新连接 (2) 处理原来的socket的数据
+					 			(1) 处理新连接
+					 				会注册新的套接字，然后调用external_connection_made(将新的连接记录到HTTPHandler.connections中)
+					 			(2) 处理新来的数据
+					 				接受数据到data中，然后调用data_came_in处理
+					 					HTTPConnection.data_came_in
+					 						会设置buf和next_func字段
+					 						注:对于next_func的设置，第一次调用read_type，分析请求命令类型(HEAD或GET)，并设置command，path，garbage
+					 							第二次及以后会调用read_header
+					 								假如接受到的数据不为空的，调用handler.data中
+					 								假如接受到的数据为空的，调用handler.getfunc,然后调用answer回应。这里的getfunc为track.py的get函数
+						 								get 			//rack.py   传入的参数是HTTPConnection.path和HTTPConnection.headers，已经之前的包read_type和read_header的缓冲数据过程中设置。
+						 									获取real_ip,nip，检查ip				//注: read_ip与nip的区别
+						 									urlparse	//分析url
+						 									如果请求的是"index.html", 则返回self.get_infopage
+						 									如果请求的是"file", 则返回的是get_file，具体为allowed列表指定的文件的内容的信息
+						 									如果请求的是"favicon.ico",返回图标信息
+						 									如果请求的是'scrape', 'scrape.php', 'tracker.php/scrape'，则返回的是get_scrape ?????
+						 									如果请求的不是'announce', 'announce.php', 'tracker.php/announce'(当然也不是之前的内容)，则返回404错误
+						 									接下来是主要的tracker函数
+						 									Filter.check 		//好像什么都没做
+						 									获取去infohash,然后检查是否允许
+						 									获取envent
+						 									调用self.add_data
+																设置downloads，completed,seedcount,times。假如没有，为他们设置新的key，内容为种子对应的hashinfo
+																新连接的peer会放到downloadsp[对应种子的hashinfo值][peerid]下，如果是旧的连接就更新。
+						 									aggregate_forward		//????? 暂不分析
+						 									data = self.peerlist	//peerlist会返回一些有用信息					 										
+						 									...
+						 									然会返回data
+			t.save_state		//同前
+
+3. Peer分析
+执行命令
+	python murder_client.py peer deploy.tar.gz.torrent deploy.tar.gz ${Peer_IP}
+murder_client.py
+	设置传入参数为--responsefile deploy.tar.gz.torrent --saveas deploy.tar.gz --ip ${Peer_IP}
+	设置isPeer，当前为True
+	run(argv)
+		构造HeadlessDisplayer对象h
+		进入while循环
+			...	配置
+			parse_params
+				parseargs			//分析参数
+				这里parseargs返回的args为responsefile的值，写入到config['responsefile'],同时设置了其他配置
+				如果配置了save_options调用saveConfig保存配置
+				createPeerID	//创建id值myid
+				构造RawServer对象rawserver
+				进入while循环，不断的寻找，直到找到可用的端口为止
+					listen_port=rawserver.find_and_bind				//找到一个监听端口
+				get_response	//读种子文件的内容到response
+				计算response['info']的hash值
+				构造BT1Download对象dow
+					... 				//配置BT1Download的一些字段
+					self.response = response
+					self.info = self.response['info']
+					self.pieces的设置，根据info的pieces进行设置，即文件分成功pieces后，计算的一组哈希值
+					self.len_pieces = len(self.pieces)		计算分块的长度
+					...
+					self.picker = PiecePicker
+					self.choker = Choker
+				dow.saveAs 						//传入的参数是h.chooseFile, h.newpath
+					//接下来有分了两个阶段进行处理，即下载的是文件的情况或下载的是目录的情况。下面仅仅分析下载的是文件的情况。
+					假如info存在'length'这里key，说明下载的是文件。
+					file_length					//获取文件长度
+					filefunc		//即h.chooseFile，实际是murder_client.py的filefunc
+					make(file)	//创建目录
+					构造files,设置个files字段。同时设置filename，datalenght字段。
+				dow.initFiles
+					self.selector_enabled默认是配置的进入if语句
+						由于priority这个在前面被移除了，忽略priority			// configdir.setDefaults(defaults,defaultsToIgnore)
+						appdataobj.getTorrentData		//查看缓存中是否有相应的种子数据。写入data，这里假设缓存中没有。
+					构造Storage对象给self.storage
+					构造StorageWrapper对象给self.storagewrapper
+					构造FileSelector对象给self.fileselector
+					storagewrapper.old_style_init
+						会依次执行self.initialize_tasks的方法。具体由三大类操作。
+						(1) checking existing data
+							self.init_hashcheck
+							self.hashcheckfunc
+						(2) moving data
+							self.init_movedata
+							self.movedatafunc
+            (3)allocating disk space'
+            	self.init_alloc
+            	elf.allocfunc
+            self.statusfunc			//HeadlessDisplayer.display
+        dow.startEngine
+        	遍历各个pieces，通过storagewrapper.do_I_have判断这个piece是否完成。完成了就用self.picker.complete(i)记录。
+        	构造upmeasure和downmeasure，均为Measure对象
+        	这里没有出传入ratelimiter，所有构造一个Ratelimiter
+        	设置ratelimiter的最大上载时间
+        	设置ratemeasure
+        	self.downloader设置为Downloader对象
+        	设置最大下载速度
+        	构造connecter
+        	构造encoder
+        	构造httpdownloader
+        	这里没有设置httpseeds，暂时不考虑
+        	selector_enabled默认是设置的
+	        	fileselector.tie_in
+	        	deleteTorrentData	
+	        根据是否设置"super_seeder"判断是否调用set_super_seed 			//super_seeder的作用?????
+        dow.startRerequester
+        	如果配置了announce-list，就更新trackerlist。否则tracker_list就是直接传入的url
+					构造rerequester
+        	rerequester.start
+        		self.sched(self.c, self.interval/2)		//实际上shed是rawserver.add_task
+        		//注:因为是add_task，因此可以知道这个是在不断地调用该服务，即调用self.c
+        			self.c
+        				假如self.howmany小于self.minpeers		//配置参数minpeers相关
+        					self.force_rapid_update					//force_rapid_update这里在startRerequester传入参数的时候并没有设置，所以不考虑
+        				self.announce
+        					构造一个字符串s
+        					self.rerequest(s,callback)
+										等待5s保证之前的循环完成
+										启动一个线程，执行函数是self._request
+											self._request		//这个参数s是self.announce构造的字符串，callback是为了下次循环设置，忽略吧
+											构造s，增加ip的内容
+											这里self.special为None
+											遍历trackerlist		//这里只有一个tracker
+												rerequest_single
+													构造一个线程执行了_rerequest_single			//t是tracker,s是字符串
+														urlopen			//用构造的tracker的url+s打开参数,也就是给tracker发一个announce
+														data=h.read //data为tracker返回的信息
+														r = bdecode(data, sloppy=1)			//解码到r
+														check_peers
+															检查工作，包括类型，info，是否出现"failure reason"
+															检查peers下面的ip，port，peer id是否正确
+															检查其他相关内容
+														self.externalsched(add)					//将add函数假如到处理队里中
+														分析一下add函数，其实就是调用了postrequest
+															postrequest
+																设置announce_interval,interval,trackerid,last字段
+																分析peers
+																//检查maxpeers，更新last?????
+																shuffle(peers)			//打乱了peers的顺序
+																self.connect(peer)	//实际调用了encoder.start_connections
+																	encoder.start_connections			//建立连接
+																		增加一个任务_start_connection_from_queue， 并设置to_connect为之前读取的peers
+																		...			//一些设置，修改了delay
+																		self.start_connection
+																			raw_server.start_connection
+        dow.autoStats
+        listen_forever			//传入参数为self.encoder， 即Encoder对象
+
+4. Seed分析
+python murder_client.py seed deploy.torrent deploy_file ${自己的ip}
+其中，seed和peer的区别仅仅在于finished之后，程序是否要关闭。

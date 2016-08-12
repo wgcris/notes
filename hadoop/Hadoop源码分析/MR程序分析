@@ -2,7 +2,7 @@
 一 程序的提交
 WordCount::main
 	GenericOptionsParser					//处理传入参数加入到conf中
-	Job.getInstance
+	Job.getInstance							//构造一个Job对象
 		getInstance
 			构造JobConf对象，并传入配置参数conf
 			构造Job对象
@@ -20,14 +20,17 @@ WordCount::main
 	waitForCompletion						//org.apache.hadoop.mapreduce.Job.waitForCompletion
 		submit										//只要为DEFINE状态才提交
 			setUseNewAPI						//除非有特别配置，否则使用新的api
-			connect									//构造job.cluster
+			connect									//构造job.cluster，这里Cluster对象是集群的抽象，可以跟AM通信
 				设置conf,ugi	
-				构造Cluster对象
+				构造Cluster对象						
 					initialize
 						这里使用了ServiceLoader技术, 会把所有ClientProtocolProvider的子类加载到frameworkLoader。然后根据配置的mapreduce的框架选择provider，并赋值给clientProtocolProvider(clientProtocolProvider.create赋值给client)。这里配置了yarn, 因此选择YarnClientProtocolProvider。对于YarnClientProtocolProvider的create返回为YarnRunner(conf),赋值给client。
+						这里构造的client对象是与ClientProtocol的实现，是客户端与AM通信的对象。
 			构造submitter
 			submitter.submitJobInternal		//使用当前用户(即客户端的用户)提交job
-			...
+				checkSpecs
+				
+
 				设置jobStagingArea							//最终会调用YarnRunner::getStagingAreaDir => ResourceMgrDelegate::getStagingAreaDir => MRApps::getStagingAreaDir, 然后访问yarn.app.mapreduce.am.staging-dir, 线上集群设置为/user。所以最后为/user/${user}/.staging
 				...				
 				设置submitJobDir								//最后为	/user/${user}/.staging/${appid}
@@ -78,9 +81,10 @@ main
 							如果是CONTAINER_FAILED事件，...
 					然后启动该线程类
 				startJobs
+
+
+
 					
 附录A 配置的说明
 mapreduce.client.completion.pollinterval				//表示客户端循环判断job是否完成的时间间隔
-
-
 

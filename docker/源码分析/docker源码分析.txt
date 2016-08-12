@@ -182,11 +182,10 @@ main
 							
 							}
 							
-					
 						syscall.Setgroups
 						syscall.Setgid
 						syscall.Setuid
 				...
 				system.Execv(args[0], args[0:], os.Environ())								//执行用户程序
 				
-																											
+																										

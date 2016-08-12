@@ -1,0 +1,4 @@
+/pro/meminfo
+
+total_rss = get_mm_rss(mm);
+
