@@ -85,9 +85,5 @@ main
 					然后启动该线程类
 				startJobs
 
-
-
-					
 附录A 配置的说明
 mapreduce.client.completion.pollinterval				//表示客户端循环判断job是否完成的时间间隔
-

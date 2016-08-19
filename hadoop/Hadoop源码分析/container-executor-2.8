@@ -1,0 +1,13 @@
+container-executor 2.8分支的源码分析
+
+(1) 编译
+在hadoop/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/pom.xml中设置编译参数与命令
+传入的命令为cmake
+工作目录为${project.build.directory}/native，即target/native目录(预先已经创建)
+传入参数为${basedir}/src/ -DHADOOP_CONF_DIR=${container-executor.conf.dir} -DJVM_ARCH_DATA_MODEL=${sun.arch.data.model}
+执行的命令可以转化为cmake src/ -D../etc/hadoop -DJVM_ARCH_DATA_MODEL=${sun.arch.data.model}			//这里暂时不知道cpu位数在哪里设置
+并设置环境变量CFLAGS为${container-executor.additional_cflags}，暂时没有设置
+
+main
+	
+
