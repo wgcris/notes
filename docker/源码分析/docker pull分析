@@ -1,0 +1,202 @@
+源码版本1.10.3
+
+1. docker pull 分析
+命令: docker pull bdp-docker.jd.com:5000/hecate_base_dmp
+
+从客户端的CmdPull开始分析，至于如果到这一步请看"docker源码分析"
+
+main								//				docker/docker.go
+	...
+	clientCli = client.NewDockerCli
+		...
+		cli.client = client.NewClient
+		...
+	...,即ithub.com/docker/engine-api/client/interface.go
+		tryImageCreate
+			发送/image/create
+
+CmdPull 					//			client/pull.go
+	...
+	imagePullPrivileged
+		...
+		ImagePull 		//	执行的是client.ImagePull,即vendor/src/github.com/docker/engine-api/client/interface.go
+			tryImageCreate
+				发送/image/create
+		
+Docker Deamon的程序在1.10.3版本中与1.2.0相比，修改为CmdDaemon启动daemon
+serveapi在daemon启动，设置接受的API的参数。
+其中，api/server/router/local/local.go中设置了/image/create的处理函数，为postImagesCreate(api/server/router/local/image.go)
+daemon拉镜像的程序为postImagesCreate(api/server/router/local/image.go)
+
+postImagesCreate											// api/server/router/local/image.go
+	httputils.ParseForm									//解析request		注: fromImage = repo:tag
+	image,repo,tag,message							//获取解析后的url的各个部分
+	认证相关
+	构造WriteFlusher对象output						
+	...
+	s.daemon.PullImage		// daemon/daemon.go 	参数说明: 
+		...
+		distribution.Pull 										// distribution/pull.go
+			imagePullConfig.RegistryService.ResolveRepository		//解析仓库信息
+			validateRepoName									//判断仓库名字是否有效，不能为""或scratch
+			imagePullConfig.RegistryService.LookupPullEndpoints				//LookupPullEndpoints creates an list of endpoints to try to pull from
+				Service.lookupEndpoints
+					s.lookupV2Endpoints
+						//首先是处理docker.io的信息，这里暂时略
+						nameString是uri的fullname，这如果没有'/',表示镜像invalid
+						获取hostname，即'/'前面的内容，即bdp-docker.jd.com:5000
+						构造tlsConfig
+						构造endpoints对象，其中预先放置一个url为"https://bdp-docker.jd.com:5000"的镜像
+						然后根据是否考虑非安全验证，决定是否添加http协议的url
+					然后考虑是否添加v1版本的endpoints
+			遍历各个endpoints
+				根据各个endpoinit构造puller		// 会根据协议来创建具体的puller
+				puller.Pull 								// 对于v2版本的puller，这里调用distribution.pull_v2.go中的Pull函数
+					构造仓库p.repo 							//NewV2Repository在distribution/registry.go
+				p.pullV2Repository
+					layersDownloaded					// lovely, must be helpfull
+					reference.IsNameOnly{			//IsNameOnly查看ref是否只有name或这说是否绑定了tag或digest
+							p.pullV2Tag								
+						//该分支，为未打tag的情况，不做主要分析
+					}	else {
+							p.rep.Tags						//构造tags
+							遍历tags
+								reference.WithTag		//构造为name+tag的形式
+								p.pullV2Tag
+									p.repo.Manifests		//构造manSvc，经过查询具体构造了Manifests，vendor/src/github.com/docker/distribution/registry/client/repository.go
+									if isTagged
+										manSvc.Get				// vendor/src/github.com/docker/distribution/registry/client/repository.go
+										tagged.Tag 				// 构造tagOrDigest, 就是直接获取tag
+									...
+									//接下来的一段是需要判断manifest的类型，具体的类型是根据响应的Content-Type决定(具体在上面的manSvc.Get中)
+									下面switch以schema2为例书名
+										p.pullSchema2
+											验证
+											构造target,imageID 											//target实质是config
+											p.config.ImageStore.Get(imageID)				//检查是否已经存储
+											p.pullSchema2ImageConfig								//???
+											遍历各个层
+												然后添加相应对象到descriptors中						//这里类型是xfer.DownloadDescriptor，猜测是下载相关
+											构造downloadRootFS
+											p.config.DownloadManager.Download
+											然后验证下载的信息是否匹配config
+											p.config.ImageStore.Create 							//??? must be helpfull
+											...
+					}
+					
+
+	s.daemon.ImportImage(src, newRef, message, r.Body, output, newConfig)
+
+					
+2. docker save源码分析
+docker save -o centos7.1.tar bdp-docker.jd.com:5000/library/centos:centos7.1.1503
+
+CmdSave
+	设置outfile为输出文件
+	创建输出文件output
+	cli.client.ImageSave
+		ImageSave					// vendor/src/github.com/docker/engine-api/client/image_save.go
+			设置query参数names，即ImageId
+			cli.get("/image/get",query,nil)					//
+				cli.sendRequest("GET", "/image/get", query, nil, nil)
+					cli.sendClientRequest("GET", "/image/get", query, params, headers)			// params应该没有任何内容，headers的"Content-Type"设置为"application/json"
+						具体暂时部分析了，仅仅知道是给serveapi发送一个请求，然后等待serverapi的回应
+	io.Copy			//将读出的内容写入文件。
+
+serverapi回应GET /images/get请求，会调用getImagesGet
+getImagesGet 						// api/server/router/local/image.go
+	设置相应的"Content-Type"为"application/x-tar"
+	获取镜像名称
+	daemon.ExportImage
+		tarexport.NewTarExporter			// 传入的三个参数daemon.imageStore, daemon.layerStore, daemon.referenceStore
+		imageExporter.Save 						// image/tarexport/save.go
+			l.parseNames								// 传入的参数是
+				解析得到Named
+				l.is.Search								// is为image.Store
+					is.digestSet.Lookup 		//
+			saveSession.save 						// image/tarexport/save.go
+				遍历各个镜像
+					s.saveImage							// 传入的参数为image的id
+						s.is.Get 							// 获取id对应的image自指针
+						遍历rootfs下面的diffids
+							createID						//根据当前层的layer_id和父亲的层的id等配置信息生成hash值，作为ID
+							saveLayer						//生成对应层的信息，这个对应于docker save得到tar包后解压具体的层的文件夹。
+								
+							讲v1Img.ID加入到layers
+						
+						创建与名字相同的以.json结尾的配置文件
+
+
+s.is变量实质就是daemon.imageStore，源自于Router
+
+CmdDaemon 			//这里由关于layerStore,imageStore
+	d.layerStore, err = layer.NewStoreFromOptions			//StorePath这里为/data3/docker， MetadataStorePathTemplate为/data3/docker/image/devicemapper(根据驱动决定)/layerdb
+		构造一个graph的driver
+			查看/data3/docker目录下的文件夹啊，确实driver类型。
+		NewFSMetadataStore
+			创建/data3/docker/image/devicemapper/layerdb目录
+			返回fileMetadataStore对象，仅仅设置了root对象
+		NewStoreFromGraphDriver
+			这里构造了layerStore对象ls
+			store.list				// layer/filestore.go
+				使用sha256算法，并获得对应目录/data3/docker/image/devicemapper/layerdb/sha256
+				遍历/data3/docker/image/devicemapper/layerdb/sha256
+					首先遍历非mounts目录，其实下面都是数具体的hash值的目录，因为使用ioutil.ReadDir查目录下的文件，这里得到的记过是经过排序的。
+					NewDigestFromHex	//将dgst修改为sha256:${hash目录的文件名的形式}
+					将dgst添加到ids上		//将/data3/docker/image/devicemapper/layerdb/sha256下的目录转化为sha256:${文件名}的形式
+				然后遍历/data3/docker/image/devicemapper/layerdb/mounts目录，得到结果是排序的
+					然后将mount目录下的文件名字加入到mounts切片中
+				返回ids，mounts
+			遍历ids
+				ls.loadLayer(id)					// layer/layer_store.go
+					ls.store.GetDiffId			// layer/filestore.go
+						获取diff文件的信息				// 对应目录下的diff文件
+					ls.store.GetSize				//对应size目录
+					ls.store.GetCacheID(layer)
+					ls.store.GetParent(layer)
+					构造roLayer对象cl，根据前面的layer(文件夹名),diff,size,chacheId,ls构造
+					如果由parent得到parent的，设置parent值
+					最后讲构造的cl对象放入到ls.layerMap
+			遍历mounts
+				ls.loadMount
+					ls.store.GetMountID
+					ls.store.GetInitID
+					ls.store.GetMountParent
+					构造mountedLayer对象ml,根据前面信息
+					如果有parent，设置parent项目
+					最后讲得到的ml放置到ls.mounts
+
+	d.layerStore, err = layer.NewStoreFromOptions
+	ifs, err := image.NewFSStoreBackend(filepath.Join(imageRoot, "imagedb"))			// 即/data3/docker/image/devicemapper/imagedb
+	d.imageStore, err = image.NewImageStore(ifs, d.layerStore)										// daemon/daemon.go
+		构造is结构体，fs为上面的ifs
+		is.restore()
+			遍历/data3/docker/image/devicemapper/imagedb目录，查看walk代码实际是遍历下面的content/sha256的内容
+				执行闭包		// image/store.go
+					is.Get(id)						// 在/data3/docker/image/devicemapper/imagedb/content/sha256目录下得到的信息生成image对象
+						is.fs.Get(id)
+						NewFromJSON
+						构造img的其他信息
+					chainID := img.RootFS.chainID 			
+						CreateChainID(r.DiffIDs)		// r.DiffIDs对应于/data3/docker/image/devicemapper/imagedb/content/sha256具体的image文件下的rootfs->diff_ids
+							createChainIDFromParent("",dgsts[]) 	//
+								createChainIDFromParent		//递归调用，根据相邻的层，计算所有层的hash值
+					is.ls.Get(chainID)		//
+						ls.Get 							// dalyer/layer_store.go 
+							ls.get 						// 获取层信息
+								ls.getWithoutLock	
+									ls.layerMap[layer]						
+							layer.getReference()
+					将image的id增加到is.digestSeet中
+					最后讲构造号的iamgeMeta假如到is.images中
+				遍历is.images
+
+
+
+image下面的rootfs.diffids,根据这这些diffids生成其hash值，然后得到的值就是layer的id
+
+
+
+保存一个layer的过程。
+storeLayer
+

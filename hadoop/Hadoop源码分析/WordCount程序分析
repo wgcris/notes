@@ -6,8 +6,13 @@
 2. 源码分析
 2.1 wordcount程序的提交
 WordCount::main
+<<<<<<< HEAD
 	GenericOptionsParser					//分析传入参数，这里传入的参数只有两个: /tmp/in /tmp/out	
 	Job.getInstance
+=======
+	GenericOptionsParser					//处理传入参数加入到conf中
+	Job.getInstance							//构造一个Job对象
+>>>>>>> 04da390af74aec44d749bc6bf2337e699391675f
 		getInstance
 			构造Job对象
 				设置Job的cluster字段为null
@@ -22,6 +27,7 @@ WordCount::main
 	FileOutputFormat.setOutputPath
 	waitForCompletion						//org.apache.hadoop.mapreduce.Job.waitForCompletion
 		submit										//只要为DEFINE状态才提交
+<<<<<<< HEAD
 			setUseNewAPI						
 				设置numReduces，由mapreduce.job.reduces设置，默认为1				
 				假如没有配置mapred.mapper.class就设置mapred.mapper.new-api为true，标记使用新的map的api
@@ -69,6 +75,40 @@ WordCount::main
 						appContext								//构造一些启动参数，其中包括要启动的appmaster的类和参数等。其中要启动类为org.apache.hadoop.mapreduce.v
 
 2.app.MRAppMaster
+=======
+			setUseNewAPI						//除非有特别配置，否则使用新的api
+			connect									//构造job.cluster，这里Cluster对象是集群的抽象，可以跟AM通信
+				设置conf,ugi	
+				构造Cluster对象						
+					initialize
+						这里使用了ServiceLoader技术, 会把所有ClientProtocolProvider的子类加载到frameworkLoader。然后根据配置的mapreduce的框架选择provider，并赋值给clientProtocolProvider(clientProtocolProvider.create赋值给client)。这里配置了yarn, 因此选择YarnClientProtocolProvider。对于YarnClientProtocolProvider的create返回为YarnRunner(conf),赋值给client。
+						这里构造的client对象是与ClientProtocol的实现，是客户端与AM通信的对象。
+			构造submitter
+			submitter.submitJobInternal		//使用当前用户(即客户端的用户)提交job
+				checkSpecs
+				获取配置conf
+				addMRFrameworkToDistributedCache
+
+
+
+				设置jobStagingArea							//最终会调用YarnRunner::getStagingAreaDir => ResourceMgrDelegate::getStagingAreaDir => MRApps::getStagingAreaDir, 然后访问yarn.app.mapreduce.am.staging-dir, 线上集群设置为/user。所以最后为/user/${user}/.staging
+				...				
+				设置submitJobDir								//最后为	/user/${user}/.staging/${appid}
+				...			
+				copyAndConfigureFiles
+					构造JobResourceUploader
+					uploadFiles									//会把指定文件拷贝到hdfs
+					getWorkingDirectory					
+				...
+				writeSplits										//创建split
+					writeNewSplits
+						获取InputFormat对象input,根据JobContextImpl::getInputFormatClass可知默认使用TextInputFormat，这里以它做分析。
+						排列inputsplit, 返回map的数目
+				设置queue,acl
+				将配置信息job.xml写到hdfs中
+				submitClient.submitJob			//submitClient为YarnRunner				
+					appContext								//构造一些启动参数，其中包括要启动的appmaster的类和参数等。其中要启动类为org.apache.hadoop.mapreduce.v2.app.MRAppMaster
+>>>>>>> 04da390af74aec44d749bc6bf2337e699391675f
 					submitApplication					//ResourceMgrDelegate::submitApplication => YarnClientImpl::submitApplication向RM发送获取app请求。通过代理向RM发送提交app请求。
 					getApplicationReport
 					getYarnApplicationState		//判断提交job情况
@@ -102,9 +142,6 @@ main
 							如果是CONTAINER_FAILED事件，...
 					然后启动该线程类
 				startJobs
-					
+
 附录A 配置的说明
 mapreduce.client.completion.pollinterval				//表示客户端循环判断job是否完成的时间间隔
-
-
-
