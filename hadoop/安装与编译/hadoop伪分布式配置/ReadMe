@@ -1,0 +1,75 @@
+本文说明如何配置hadoop伪分布式，仅仅用于单机测试。所以，不考虑太多问题，仅仅用于验证一些简单的任务。
+本文均以zcy用户进行所有操作。hostname这里为zcy-pc
+1. ssh 配置
+	cd ~/.ssh
+	ssh-keygen		输入数次Enter后得到公钥私钥文件
+	cat id_rsa.pub >> authorized_keys
+	chmod 600 authorized_keys	
+	输入 ssh zcy-pc	验证免密码登录
+
+2. 配置
+core-site.xml
+	<property>
+		<name>hadoop.tmp.dir</name>
+		<value>/home/zcy/hadoop/tmp</value>
+	</property>
+	<property>
+		<name>fs.defaultFS</name>
+		<value>hdfs://localhost:9000</value>
+	</property>
+
+hdfs-site.xml
+	<property>
+		<name>dfs.replication</name>
+		<value>1</value>
+	</property>
+	<property>
+		<name>dfs.namenode.name.dir</name>
+ 		<value>/home/zcy/data/dfs/name</value>
+	</property>
+	<property>
+		<name>dfs.datanode.data.dir</name>
+		<value>/home/zcy/data/dfs/data</value>
+	</property>
+
+mapred-site.xml
+  <property>
+    <name>mapreduce.framework.name</name>
+    <value>yarn</value>
+  </property>
+
+yarn-site.xml
+	<property>
+		<name>yarn.resourcemananger.hostname</name>
+		<value>zcy-pc</value>
+	</property>
+	<property>
+		<name>yarn.nodemanager.aux-services</name>
+<!--		<value>mapreduce_shuffle,spark_shuffle</value> -->
+		<value>mapreduce_shuffle</value>
+	</property>
+ 	<property>
+ 		<name>yarn.nodemanager.aux-services.mapreduce_shuffle.class</name>
+ 		<value>org.apache.hadoop.mapred.ShuffleHandler</value>
+ 	</property>
+<!--
+	<property>
+ 		<name>yarn.nodemanager.aux-services.spark_shuffle.class</name>
+ 		<value>org.apache.Spark.network.yarn.YarnShuffleService</value>
+ 	</property>
+-->
+
+hadoop-env.sh
+配置JAVA_HOME
+
+拷贝spark的包
+cp ~/software/spark-1.6.2-bin-hadoop2.6/lib/spark-1.6.2-yarn-shuffle.jar ~/software/hadoop-2.7.1/share/hadoop/yarn/lib
+
+3.启动
+start-dfs.sh
+start-yarn.sh
+localhost:50070查看hdfs的web页面
+localhost:8088查看yarn的web页面
+
+4.验证
+bin/hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar teragen 100 /tmp/out
