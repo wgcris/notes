@@ -6,13 +6,10 @@
 2. 源码分析
 2.1 wordcount程序的提交
 WordCount::main
-<<<<<<< HEAD
 	GenericOptionsParser					//分析传入参数，这里传入的参数只有两个: /tmp/in /tmp/out	
 	Job.getInstance
-=======
 	GenericOptionsParser					//处理传入参数加入到conf中
 	Job.getInstance							//构造一个Job对象
->>>>>>> 04da390af74aec44d749bc6bf2337e699391675f
 		getInstance
 			构造Job对象
 				设置Job的cluster字段为null
@@ -27,12 +24,11 @@ WordCount::main
 	FileOutputFormat.setOutputPath
 	waitForCompletion						//org.apache.hadoop.mapreduce.Job.waitForCompletion
 		submit										//只要为DEFINE状态才提交
-<<<<<<< HEAD
 			setUseNewAPI						
 				设置numReduces，由mapreduce.job.reduces设置，默认为1				
 				假如没有配置mapred.mapper.class就设置mapred.mapper.new-api为true，标记使用新的map的api
 				假如没有配置mapred.reducer.class就设置mapred.reducer.new-api为true，标记使用新的reduce的api
-			connect									//构造job.cluster	
+			connect									//构造josubmitJobDirb.cluster	
 				构造Cluster对象
 					initialize
 						这里使用了ServiceLoader技术, 会把所有ClientProtocolProvider的子类加载到frameworkLoader。然后根据配置的mapreduce的框架选择provider，并赋值给clientProtocolProvider(clientProtocolProvider.create赋值给client)。这里配置了yarn, 因此选择YarnClientProtocolProvider。对于YarnClientProtocolProvider的create返回为YarnRunner(conf),赋值给cluster.client字段。
@@ -52,27 +48,59 @@ WordCount::main
 						最终会调用YarnRunner::getStagingAreaDir => ResourceMgrDelegate::getStagingAreaDir => MRApps::getStagingAreaDir, 然后访问yarn.app.mapreduce.am.staging-dir, 线上集群设置为/user。所以最后为/user/${user}/.staging
 					解析当前主机的的ip地址。如果解析到地址就设置submitHostAddress，submitHostName，以及配置项mapreduce.job.submithostname，mapreduce.job.submithostaddress
 					submitClient.getNewJobID				//submitClient即cluster.client,因此调用YARNRunner.getNewJobID
-						YARNRunner.getNewJobID
+						YARNRunner.getNewJobID				//首先向集群提交申请应用，然后生成一个集群号和job号一起组成的jobid
 							resMgrDelegate.getNewJobID	//resMgrDelegate的构造函数中已经声明了YarnClient类型的对象client
 								client.createApplication.getApplicationSubmissionContext
 									createApplication经过一层层调用，最后会RPC调用ApplicationClientProtocol::getNewApplication，向RM申请一个任务。
 									appSubmissionContext获取上下文配置
-					...				
+								获取applicationId
+								TypeConverter.fromYarn
+									获取集群的时间戳，根据时间戳和appid生成一个JobId对象
+					设置jobid	
 					设置submitJobDir								//最后为	/user/${user}/.staging/${appid}
-					...			
-					copyAndConfigureFiles
+					设置配置参数，mapreduce.job.user.name，hadoop.http.filter.initializers，mapreduce.job.dir
+					...token
+					设置dfs.erp.authorization等...(JD，暂时略)
+					...token
+					copyAndConfigureFiles					//第二个参数为submitJobDir
 						构造JobResourceUploader
 						uploadFiles									//会把指定文件拷贝到hdfs
-						getWorkingDirectory					
-					...
-					writeSplits										//创建split
+							获取replication数目，由mapreduce.client.submit.file.replication配置
+							判断是否设置mapreduce.client.genericoptionsparser.used，没有设置打印warming
+							获取tmpfiles, tmpjars, tmparchives变量的内容						?????变量值?????
+							job.getJar							//获取mapreduce.job.jar的内容	?????变量值?????
+							检查submitJobDir是否存在，如果已经存在抛出异常。
+							创建submitJobDir目录，并设置权限为700
+							然后设置${submitJobDir}/files，${submitJobDir}/archives,${submitJobDir}/libjars目录，并将对应的tmpfiles, tmpjars, tmparchives上传到hdfs中。然后将其爱如对应的缓冲。
+							同样上传jobjar
+							...token
+						getWorkingDirectory
+							获取mapreduce.job.working.dir的值
+					submitJobFile		//得到${submitJobDir}/job.xml
+					writeSplits			//返回maps，即整理得到的splits的数目
 						writeNewSplits
-							获取InputFormat对象input,根据JobContextImpl::getInputFormatClass可知默认使用TextInputFormat，这里以它做分析。
-							排列inputsplit, 返回map的数目
-					设置queue,acl
-					将配置信息job.xml写到hdfs中
+							获取InputFormat对象input,根据JobContextImpl::getInputFormatClass可知默认使用TextInputFormat。
+							input.getSplits		//实际调用FileInputFormat。返回splits，即输入文件对应的切片。
+								设置minSize,maxSize。
+								获取${mapreduce.input.fileinputformat.numinputfiles}下的文件。
+								遍历各个文件
+									获取各个文件对应的块位置blkLocations
+									计算splitsize的大小
+									根据splitsize构造split，并添加到splits中。
+								设置配置项mapreduce.input.fileinputformat.numinputfiles，为文件数
+							然后重新排序为数组array
+							createSplitFiles				//写一些元数据的信息
+					设置mapreduce.job.maps的值，为writeSplits计算得到的map数目
+					获取mapreduce.job.queuename为队列名
+					获取acl，YARNRunner默认为*,暂时忽略
+					...token
+					reservation相关，暂时不考虑。
+					writeConf										//将配置信息传入hdfs						
 					submitClient.submitJob			//submitClient为YarnRunner				
-						appContext								//构造一些启动参数，其中包括要启动的appmaster的类和参数等。其中要启动类为org.apache.hadoop.mapreduce.v
+						...token						
+						here!!!!!!!!!!
+
+
 
 2.app.MRAppMaster
 =======
@@ -108,7 +136,6 @@ WordCount::main
 				将配置信息job.xml写到hdfs中
 				submitClient.submitJob			//submitClient为YarnRunner				
 					appContext								//构造一些启动参数，其中包括要启动的appmaster的类和参数等。其中要启动类为org.apache.hadoop.mapreduce.v2.app.MRAppMaster
->>>>>>> 04da390af74aec44d749bc6bf2337e699391675f
 					submitApplication					//ResourceMgrDelegate::submitApplication => YarnClientImpl::submitApplication向RM发送获取app请求。通过代理向RM发送提交app请求。
 					getApplicationReport
 					getYarnApplicationState		//判断提交job情况

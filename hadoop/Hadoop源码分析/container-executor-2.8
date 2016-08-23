@@ -1,13 +1,48 @@
 container-executor 2.8分支的源码分析
 
-(1) 编译
+1. 编译参数
+1.1 cmake命令
 在hadoop/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/pom.xml中设置编译参数与命令
 传入的命令为cmake
 工作目录为${project.build.directory}/native，即target/native目录(预先已经创建)
 传入参数为${basedir}/src/ -DHADOOP_CONF_DIR=${container-executor.conf.dir} -DJVM_ARCH_DATA_MODEL=${sun.arch.data.model}
-执行的命令可以转化为cmake src/ -D../etc/hadoop -DJVM_ARCH_DATA_MODEL=${sun.arch.data.model}			//这里暂时不知道cpu位数在哪里设置
+container-executor.conf.dir默认配置为../etc/hadoop。这里修改为/etc/yarn-executor/
+执行的命令可以转化为cmake src/ -DHADOOP_CONF_DIR=/etc/yarn-executor/ -DJVM_ARCH_DATA_MODEL=${sun.arch.data.model}			//这里暂时不知道cpu位数在哪里设置
 并设置环境变量CFLAGS为${container-executor.additional_cflags}，暂时没有设置
+1.2 make编译
+make target/native				//编译生成二进制文件
 
+2. 源码分析
 main
-	
+	open_log_files			//设置日志，默认使用标准输出，标准错误
+	assert_valid_setup
+		get_executable
+			读当前进程对应的/proc/${pid}/exe文件，读取该链接文件，并获取该进程的对应的可执行文件的名称。
+		获取配置文件，/etc/yarn-executor/container.cfg
+		resolve_config_path				//将container.cfg路劲设置为绝对路径。
+		check_configuration_permissions			//确保container.cfg以及他所有的父目录都是root
+		read_config													//以key-value形式读取配置，读到config.confdetails
+		get_value(NM_GROUP_KEY)							//读取配置中的yarn.nodemanager.linux-container-executor.group的值，这里设置为yarn
+		getgrnam(nm_group)									//读取yarn组信息
+		set_nm_uid													//设置nm_uid和nm_gid分别为当前进程的uid和yarn.nodemanager.linux-container-executor.group(这里为yarn)对应的组id
+																				//这时候的进程的nm_uid还是NM启动的。因此这里应该为yarn
+		setuid															//这里设置当前进程的uid为0，即root
+		setgid															//这里设置当前进程的gid为0，即yarn的gid
+		check_executor_permissions					
+			需要保证container-executor这个二进制文件的拥有者是root
+			需要保证当前进程的组和container-executor这个二进制文件的组一致，这里为yarn
+			需要保证container-executor这个二进制文件不能白其他用户写和执行，并设置UID
+	validate_arguments			//检查参数
+	switch
+		case CHECK_SETUP
+			直接返回正确
+		case MOUNT_CGROUPS
+			使用例子:container-executor --mount-cgroups <hierarchy> <controller=path>
+			mount_cgroup				//挂载cgroup目录，并在cgroup下创建具体的目录，这里为cpu,cpuacct/hadoop-yarn
+		case TRAFFIC_CONTROL_MODIFY_STATE:
+			traffic_control_modify_state
+				run_traffic_control
+...		
+			
+		
 
