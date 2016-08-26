@@ -1,12 +1,13 @@
 0. 配置信息
-172.18.149.181 NN1 	RM1				 	 
-172.18.149.182 NN2 	RM2					 
-172.18.149.183 DN		NM	JN	ZK	JH
-172.18.149.184 DN 	NM	JN	ZK 
-172.18.149.185 DN		NM	JN	ZK
-#172.18.149.186 DN 	NM	JN	ZK
-ssh配置，略
+172.18.149.181 NN1 	RM1	DN		NM		 	 
+172.18.149.182 NN2 	RM2	DN  	NM		 
+172.18.149.183 					DN		NM		JN	ZK	JH
+172.18.149.184 					DN 		NM		JN	ZK 
+172.18.149.185 					DN		NM		JN	ZK
 
+注意:(2)表示后增加的节点
+
+ssh配置，略
 1. zookeeper的启动
 (1) 修改/data1/zmhadoop/zookeeper/data/myid的内容为对应的节点id。
 (2) 启动zookeeper服务
@@ -56,16 +57,17 @@ ssh配置，略
 	mr-jobhistory-daemon.sh start historyserver
 
 注: 这里发现web页面访问RM的时候，没有显示节点。只有使用yarn node -list -all的时候才能发现四个节点，且都处于UNHEALTHY状态。
-		通过http://bjm6-decare-149181.hadoop.jd.local:50320/cluster/nodes/unhealthy可以查看unhealthy节点的信息，查看Health-report列发现是因为没有简历/data*/yarn/local目录。增加相应的目录，并修改相应权限即可。
+		通过http://bjm6-decare-149181.hadoop.jd.local:50320/cluster/nodes/unhealthy可以查看unhealthy节点的信息，查看Health-report列发现是因为没有建立/data*/yarn/local目录。增加相应的目录，并修改相应权限即可。
 (4) 测试Yarn
 	hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar wordcount /test/in /test/out
-	hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar teragen
+	hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar teragen /tmp/teragen
 
 问题:
 http://172.18.149.183:19888/jobhistory
 和
 http://bjm6-decare-149181.hadoop.jd.local:50320/cluster/apps
 区别是什么?
+
 
 
 

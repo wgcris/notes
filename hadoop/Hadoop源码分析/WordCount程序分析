@@ -98,60 +98,41 @@ WordCount::main
 					writeConf										//将配置信息传入hdfs						
 					submitClient.submitJob			//submitClient为YarnRunner				
 						...token						
-						here!!!!!!!!!!
+						createApplicationSubmissionContext			//传入的jobSubmitDir即前面的submitJobDir
+							获取appid
+							设置资源。由yarn.app.mapreduce.am.resource.mb为一个container申请的内存。yarn.app.mapreduce.am.resource.cpu-vcores为一个container申请的cpu核数目
+							设置jobConfPath为${jobSubmitDir}/job.
+							根据jobSubmitDir获取URL格式的yarnUrlForJobSubmitDir
+							设置localResources,将job.xml，${mapreduce.job.jar},${job.split},${job.splitmetainfo}等加入到localResources中
+							...token
+							设置命令vargs，设置一些参数。启动类为org.apache.hadoop.mapreduce.v2.app.MRAppMaster。输出和错误分别重定向为<LOG_DIR>/stdout和<LOG_DIR>/stderr，待重置!
+							然后增加环境变量。设置shell，LD_LIBRARY_PATH......
+							设置acls，队列(mapreduce.job.queuename)等参数
+							如果AM container已经存在，特殊标记，暂不考虑。
+							设置labels
+							设置priority
+						submitApplication			//提交应用
+						立即返回判断状态
+		monitorAndPrintJob
+			不断通过isComplete判断job是否完成，未完成继续休眠指定时间(由mapreduce.client.completion.pollinterval指定)
 
-
-
-2.app.MRAppMaster
-=======
-			setUseNewAPI						//除非有特别配置，否则使用新的api
-			connect									//构造job.cluster，这里Cluster对象是集群的抽象，可以跟AM通信
-				设置conf,ugi	
-				构造Cluster对象						
-					initialize
-						这里使用了ServiceLoader技术, 会把所有ClientProtocolProvider的子类加载到frameworkLoader。然后根据配置的mapreduce的框架选择provider，并赋值给clientProtocolProvider(clientProtocolProvider.create赋值给client)。这里配置了yarn, 因此选择YarnClientProtocolProvider。对于YarnClientProtocolProvider的create返回为YarnRunner(conf),赋值给client。
-						这里构造的client对象是与ClientProtocol的实现，是客户端与AM通信的对象。
-			构造submitter
-			submitter.submitJobInternal		//使用当前用户(即客户端的用户)提交job
-				checkSpecs
-				获取配置conf
-				addMRFrameworkToDistributedCache
-
-
-
-				设置jobStagingArea							//最终会调用YarnRunner::getStagingAreaDir => ResourceMgrDelegate::getStagingAreaDir => MRApps::getStagingAreaDir, 然后访问yarn.app.mapreduce.am.staging-dir, 线上集群设置为/user。所以最后为/user/${user}/.staging
-				...				
-				设置submitJobDir								//最后为	/user/${user}/.staging/${appid}
-				...			
-				copyAndConfigureFiles
-					构造JobResourceUploader
-					uploadFiles									//会把指定文件拷贝到hdfs
-					getWorkingDirectory					
-				...
-				writeSplits										//创建split
-					writeNewSplits
-						获取InputFormat对象input,根据JobContextImpl::getInputFormatClass可知默认使用TextInputFormat，这里以它做分析。
-						排列inputsplit, 返回map的数目
-				设置queue,acl
-				将配置信息job.xml写到hdfs中
-				submitClient.submitJob			//submitClient为YarnRunner				
-					appContext								//构造一些启动参数，其中包括要启动的appmaster的类和参数等。其中要启动类为org.apache.hadoop.mapreduce.v2.app.MRAppMaster
-					submitApplication					//ResourceMgrDelegate::submitApplication => YarnClientImpl::submitApplication向RM发送获取app请求。通过代理向RM发送提交app请求。
-					getApplicationReport
-					getYarnApplicationState		//判断提交job情况
-					getJobStatus							//返回状态
-			...
-		monitorAndPrintJob							//根据传入参数判断是否监控
-		不断通过isComplete判断job是否完成，未完成继续休眠指定时间(由mapreduce.client.completion.pollinterval指定)
+						
+							
+2.2 MRAppMaster的分析
+main
+	Thread.setDefaultUncaughtExceptionHandler				//设置uncaugth的异常
 	
 
-——————————————————————————————————————
-!!!!!这里暂时缺少RM部署MRAPP的过程!!!!!
-——————————————————————————————————————
 
 
-二 MRAppMaster的分析
-main
+
+
+
+
+
+
+
+
 	...
 	initAndStartAppMaster
 		appmaster.init
