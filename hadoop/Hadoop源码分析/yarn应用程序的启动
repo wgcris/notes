@@ -25,7 +25,6 @@
 		构造一个提交的请求，并设置appContext为提交app应用请求的上下文
 		rmClient.submitApplication					//调用ResourceManager.clientRM对应方法并返回,详细见附录E
 		然后是一些检查提交状态的工作
-		
 	monitorApplication										//monitorApplication为自定义函数，用来监视RM返回的报告
 
 (A) YarnClientImpl说明
@@ -130,7 +129,6 @@ ContinuousSchedulingThread.run
 		在AbstractYarnScheduler（FairScheduler的父类）定义，它是一个map类型，key为NodeId,value为SchedulerNode(这个类是从调度器的角度的集群节点的抽象)，表示从调度器角度理解的所有集群节点的集合。FairScheduler::addNode会增加节点，猜测是集群的节点向RM注册的时候触发FairSchedulerFairScheduler::addNode会设置该节点。
 
 
-
 (F.3) 资源调度器分配Container后，调用的事件RMContainerEventType.START
 RMContainerState.NEW==(RMContainerEventType.START,ContainerStartedTransition)==>RMContainerState.ALLOCATED
 	使用rmDispatcher处理RMAppAttemptEventType.CONTAINER_ALLOCATED事件，交给ApplicationAttemptEventDispatcher处理
@@ -167,6 +165,10 @@ RMAppNewlySavingTransition.transition
 														FairScheduler::addApplication						//这里仅仅判断该应用是否由权限提交。尚未考虑资源问题。
 															首先检查提交队列名称是否正常
 															assignToQueue					//将应用加入队列中，对分析队列算法应该很有用，暂时不分析?????
+																placementPolicy.assignAppToQueue
+																	//注:AllocationFileLoaderService中queuePlacementPolicy没有配置，使用QueuePlacementPolicy.fromConfiguration，AllocationConfiguration中的placementPolicy来源于此
+																queueMgr.getLeafQueue
+																rmApp.setQueue
 															检查权限
 															将RMAppImpl加入到已经调度的app列表applications中
 															queue.getMetrics().submitApp			//提交app，对分析队列算法应该很有用，暂时不分析?????

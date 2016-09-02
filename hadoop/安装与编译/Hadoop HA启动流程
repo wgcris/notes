@@ -63,12 +63,8 @@ ssh配置，略
 	hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar teragen /tmp/teragen
 
 问题:
-http://172.18.149.183:19888/jobhistory
+http://172.18.149.183:19 888/jobhistory
 和
 http://bjm6-decare-149181.hadoop.jd.local:50320/cluster/apps
 区别是什么?
-
-
-
-
 
