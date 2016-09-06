@@ -1,0 +1,177 @@
+hadoop后续版本中LinuxContainerExecutor的功能。
+
+
+LinuxContainerExecutor.java
+
+	init
+		CGroupsHandlerImpl构造函数
+			...
+			init
+				initializeControllerPaths
+					initializeControllerPathsFromMtab				//如果yarn.nodemanager.linux-container-executor.cgroups.mount为false才执行，这里会执行
+						检查cpu,和net_cls下是否由对应的hadoop-yarn(可配置)目录
+	
+		resourceHandlerChain=ResourceHandlerModule.getConfiguredResourceHandlerChain
+		  addHandlerIfNotNull(handlerList, getOutboundBandwidthResourceHandler(conf))		//addHandlerIfNotNull会把放到resourceHandlers中
+				getTrafficControlBandwidthHandler
+					设置trafficControlBandwidthHandler，类为TrafficControlBandwidthHandlerImpl
+	    addHandlerIfNotNull(handlerList, getDiskResourceHandler(conf))
+	    addHandlerIfNotNull(handlerList, getMemoryResourceHandler(conf))
+	    addHandlerIfNotNull(handlerList, getCGroupsCpuResourceHandler(conf))
+	   	返回值为ResourceHandlerChain，类为ResourceHandlerChain
+		resourceHandlerChain.bootstrap
+			ResourceHandlerChain.bootstrap
+				遍历resourceHandlers，执行各个handler的bootstrap,现进分析TrafficControlBandwidthHandlerImpl.bootstrap
+					TrafficControlBandwidthHandlerImpl.bootstrap
+						CGroupsHandlerImpl.mountCGroupController
+							挂载了CGroup目录/sys/fs/cgroup/net_cls。如果配置了yarn.nodemanager.linux-container-executor.cgroups.mount就不再挂载，这里不再挂载。
+						获取device,从yarn.nodemanager.resource.network.interface获取，默认使用eth0
+						获取strictMode,从yarn.nodemanager.linux-container-executor.cgroups.strict-resource-usage获取
+						获取rootBandwidthMbit,从yarn.nodemanager.linux-container-executor.cgroups.strict-resource-usage获取
+						获取yarnBandwidthMbit，从yarn.nodemanager.linux-container-executor.cgroups.strict-resource-usage获取
+						设置containerBandwidthMbit，为yarnBandwidthMbit/50
+						TrafficController.bootstrap
+							获取tmpDirPath为$hadoop.tmp.dir/nm-tc-rules
+							暂时不考虑NM的recovery
+							wipeState
+								构造BatchBuilder，为--tc-modify-state类型，具体的的tc指令为qdisc del dev %s parent root
+								commitBatchToTempFile
+									将tc命令写入临时文件，地址为$hadoop.tmp.dir/tc.nm-tc-rules.cmds
+							initializeState
+								构造--tc-modify-state命令对象
+								addRootQDisc
+									qdisc add dev %s root handle %d: htb default %s				参数依次是eht0,42,2
+								addCGroupFilter
+									filter add dev %s parent %d: protocol ip prio 10 handle 1: cgroup  参数为eth0,42
+								addClassToRootQDisc
+									class add dev %s parent %d:%d classid %d:%d htb rate %s ceil %s 参数eth0 42 0 42 1 ${rootBandwidthMbit} ${rootBandwidthMbit}
+								addDefaultClass				//传入参数分别是defaultClassBandwidthMbit，rootBandwidthMbit					//其中defaultClassBandwidthMbit为rootBandwidthMbit - yarnBandwidthMbit ，当然这个值小于0，就是rootBandwidthMbit
+									class add dev %s parent %d:%d classid %d:%d htb rate %s ceil %s		参数eth0 42 1 42 2 defaultClassBandwidthMbit rootBandwidthMbit
+								addYARNRootClass			//传入参数为yarnBandwidthMbit和yarnBandwidthMbit
+									class add dev %s parent %d:%d classid %d:%d htb rate %s ceil %s		参数为eth0 42 1 42 3 ${yarnBandwidthMbit} ${yarnBandwidthMbit}
+								commitBatchToTempFile			//构造文件
+								executePrivilegedOperation	//执行命令
+								
+init函数中执行的命令如下:							
+	1. 清除qd队列																			//这里直译为队列，知道一个qdisc对应一个网卡即可。
+	tc qdisc del dev eth0 parent root
+	2. 设置qd队列的root，ID为42:0,默认使用42:2
+	tc qdisc add dev eth0 root handle 42: htb default 2
+	3. 设置ID为42:0的filter的类型为cgroup
+	tc filter add dev eth0 parent 42: protocol ip prio 10 handle 1: cgroup
+	4. 增加根class，基于42:0这个qdisc,ID为42:1。由于这个是一个根class,rate和ceil都设置为rootBandwidthMbit，建议设置了网卡的最大值
+	tc class add dev eth0 parent 42:0 classid 42:1 htb rate ${rootBandwidthMbit} ceil ${rootBandwidthMbit}
+	5. 在42:1基础上增加了42:2这个类。这个类是一个默认的分类，即没有指定的class的id的进程会使用该队列。这里默认保证的小于(不包括等于)rootBandwidthMbit-yarnBandwidthMbit,ceil的值rootBandwidthMbit。
+			这里建议设置yarnBandwidthMbit小于(不包括等于)rootBandwidthMbit。如果yarnBandwidthMbit大于等于rootBandwidthMbit，默认的rate会设置为rootBandwidthMbit，这样没法保证有效的隔离。
+	tc class add dev eth0 parent 42:1 classid 42:2 htb rate ${defaultClassBandwidthMbit} ceil ${rootBandwidthMbit}
+	6. 在42:1增加另外一个类42:3。这个类专门用于yarn，网络限制为${yarnBandwidthMbit}
+	tc class add dev eth0 parent 42:1 classid 42:3 htb rate ${yarnBandwidthMbit} ceil ${yarnBandwidthMbit}
+注:
+一些tc参数的说明
+    rate     rate allocated to this class (class can still borrow) 是一个类保证得到的带宽值,如果有不只一个类,请保证所有子类总和是小于或等于父类
+    burst    max bytes burst which can be accumulated during idle period  突发流量
+    ceil     definite upper class rate (no borrows) 是一个类最大能得到带宽值
+    prio     priority of leaf; lower are served first 是优先权的设置,数值越大,优先权越小,如果是分配剩余带宽,就是数值小的会最优先取得剩余的空闲的带宽权	
+	
+	launchContainer
+		resourcesHandler.preExecute				//执行Cgroup的初始化，将被遗弃，注意cgroup的bug的移植!!!!!
+		...
+		ops=resourceHandlerChain.preStart
+			ResourceHandlerChain.preStart
+				各个handler的preStart，这里只关注TrafficControlBandwidthHandlerImpl.preStart
+				TrafficControlBandwidthHandlerImpl.preStart
+					cGroupsHandler.createCGroup					//创建net_cls下容器名称对应的目录
+					cGroupsHandler.updateCGroupParam		//掺入container的id，classid等内容					这里的classid设置是有全局的对象从4开始不断增长的，并没有特殊的含义，最大值为1024
+						向net_cls.classid写入值
+					添加到containerIdClassIdMap中					
+					然后设置返回值ops,留给container-executor使用。主要增加两个operation
+						第一个operation: ADD_PID_TO_CGROUP类型,传入参数为"cgroups=${tasksFile}",${tasksFile}以containerid命名的tasks文件
+						第二个operation: TC_MODIFY_STATE类型
+							addContainerClass					//如果设置了strictMode,rateceil一样。如果没有设置strictMode，ceil为yarnBandwidthMbit
+							构造命令tc class add dev %s parent %d:%d classid %d:%d htb rate %s ceil %s			//参数为eth0 42 3 42 classid rate ceil(根据strictMode设置)	
+																																														 //注:这里的container对应的class设置的rate为yarnBandwidthMbit/50
+																																														 //稍后改为"根据配置的内存和cpu数(可能还包括其他资源)估算出来的container的数目"
+							commitBatchToTempFile			//将命令写入文件中，并将文件名字假如ops中
+		解析上面的ops，可知上面有两个operation.在如下两个分支下执行。
+			ADD_PID_TO_CGROUP
+				resourceOps中.add			//加入到resourceOps中
+			TC_MODIFY_STATE
+				tcCommandFile					//得到命令的名称
+		squashCGroupOperations		//根据resourceOps构造operation，主要目的是将多个同类型的设置合成一条命令
+			构造ADD_PID_TO_CGROUP类型的PrivilegedOperation,由于这里只有一个参数，所以参数是"cgroups=${tasksFile}",${tasksFile}以containerid命名的tasks文件
+		重新构造resourcesOptions，这里因为只要一个参数，squashCGroupOperations并没有实质改变，resourcesOptions不变
+		...
+		构造命令command，这里最后一个参数是resourcesOptions
+			会执行container-executor.c中的launch_container_as_user函数，执行write_pid_to_cgroup_as_root函数，将pid的值写入tasks中
+		然后有在command后增加一个参数tcCommandFile
+			container-executor.c中判断如果参在tc相关参数，在执行container任务之前会执行traffic_control_modify_state，即根据临时文件执行tc命令tc class add dev %s parent %d:%d classid %d:%d htb rate %s ceil %s	
+		...
+		resourcesHandler.postExecute
+			clearLimits
+				删除了cpu相关的cgroup，这里好像没有做net_cls相关的操作
+		resourceHandlerChain.postComplete
+			TrafficControlBandwidthHandlerImpl.postComplete
+				CGroupsHandlerImpl.deleteCGroup
+					延时等待对应的tasks文件为空的时候，删除这个容器id在net_cls下对应的整个目录。延时时间为deleteCGroupDelay。
+				然后得到containerid对应的classid
+				根据得到的classid构造operation，命令为class del dev %s classid %d:%d，参数是eth0 42 ${classId},写入临时文件
+				执行删除class的操作
+				然后讲classid从注册列表中移除
+
+launchContainer函数中执行了如下命令:
+(1) 创建containerid命名的目录。(NM)
+(2) 在containerid目录下net_cls.classid文件中写入对应的class的id。(NM中)
+(3) 将运行的任务加入到对应的tasks列表中
+	echo ${pid} > /sys/fs/cgroup/net_cls/${container-id}/tasks
+(4) 增加class，父class的id为42:3 即yarn的根class,rate为??, ceil根据strictmode调整
+	tc class add dev eth0 parent 42:3 classid 42:${classid} htb rate ${rate} ceil ${rate or yarnBandwidthMbit}
+(5) 任务完成后，会根据删除对应的class
+	tc class del dev eth0 classid 42:${classId}
+
+实验:
+CGroup关于net_cls限制的实验
+
+1 配置net_cls环境
+1.1 清除资源
+tc qdisc del dev eth0 parent root
+1.2 总资源设置
+tc qdisc add dev eth0 root handle 42: htb default 2
+1.3 filter配置
+tc filter add dev eth0 parent 42: protocol ip prio 10 handle 1: cgroup
+1.4 根class
+tc class add dev eth0 parent 42:0 classid 42:1 htb rate 1000Mbit ceil 1000Mbit
+1.5 默认class
+tc class add dev eth0 parent 42:1 classid 42:2 htb rate 200Mbit ceil 1000Mbit
+1.6	yarn的类
+tc class add dev eth0 parent 42:1 classid 42:3 htb rate 800Mbit ceil 1000Mbit
+
+2 配置cgroup环境
+2.1 创建两个分组
+mkdir /sys/fs/cgroup/net_cls/container1
+mkdir /sys/fs/cgroup/net_cls/container2
+2.2 在对应的cgroup分组中写入classid
+echo 0x00420004 > /sys/fs/cgroup/net_cls/container1/net_cls.classid
+echo 0x00420005 > /sys/fs/cgroup/net_cls/container2/net_cls.classid
+2.3 创建分组的对应的class
+	tc class add dev eth0 parent 42:3 classid 42:4 htb rate 300Mbit ceil 800Mbit
+	tc class add dev eth0 parent 42:3 classid 42:5 htb rate 500Mbit ceil 800Mbit
+	strictMode的参数设置
+	tc class add dev eth0 parent 42:3 classid 42:4 htb rate 300Mbit ceil 300Mbit
+	tc class add dev eth0 parent 42:3 classid 42:5 htb rate 500Mbit ceil 500Mbit
+2.4 运行具体任务，并将进程号吸入tasks文件
+	echo $? > /sys/fs/cgroup/net_cls/container1/tasks
+	exec scp a root@172.18.149.182:/root
+2.5 清理
+	tc class del dev eth0 classid 42:4
+	tc class del dev eth0 classid 42:5
+实验过程详见doc文档
+
+3. 需要自己修改的内容
+(1) 动态配置网卡名称和网卡带宽
+(2) 修改网络限制的配置项目，与cpu资源配置分开
+
+3. 配置
+
+配置/data0/hadoop_tmp/nm-tc-rules目录
+
+mkdir -p /data0/hadoop_tmp/nm-tc-rules && chown hadp:hadoop /data0/hadoop_tmp && chmod 770 /data0/hadoop_tmp && chown yarn:yarn /data0/hadoop_tmp/nm-tc-rules && chmod 755 /data0/hadoop_tmp/nm-tc-rules

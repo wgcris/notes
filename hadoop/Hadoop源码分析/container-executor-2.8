@@ -27,7 +27,7 @@ main
 		set_nm_uid													//设置nm_uid和nm_gid分别为当前进程的uid和yarn.nodemanager.linux-container-executor.group(这里为yarn)对应的组id
 																				//这时候的进程的nm_uid还是NM启动的。因此这里应该为yarn
 		setuid															//这里设置当前进程的uid为0，即root
-		setgid															//这里设置当前进程的gid为0，即yarn的gid
+		setgid															//这里设置当前进程的gid为yarn的gid
 		check_executor_permissions					
 			需要保证container-executor这个二进制文件的拥有者是root
 			需要保证当前进程的组和container-executor这个二进制文件的组一致，这里为yarn
