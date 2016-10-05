@@ -9,7 +9,7 @@
 
 ssh配置，略
 1. zookeeper的启动
-(1) 修改/data1/zmhadoop/zookeeper/data/myid的内容为对应的节点id。
+(1) 修改/data0/zmhadoop/zookeeper/data/myid的内容为对应的节点id。
 (2) 启动zookeeper服务
 	分别进入172.18.149.184，172.18.149.185，172.18.149.186启动zookeeper服务，执行如下命令:
 		./zkServer.sh start
@@ -60,11 +60,13 @@ ssh配置，略
 		通过http://bjm6-decare-149181.hadoop.jd.local:50320/cluster/nodes/unhealthy可以查看unhealthy节点的信息，查看Health-report列发现是因为没有建立/data*/yarn/local目录。增加相应的目录，并修改相应权限即可。
 (4) 测试Yarn
 	hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar wordcount /test/in /test/out
-	hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar teragen /tmp/teragen
+	hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar teragen 100 /tmp/teragen
+
 
 问题:
 http://172.18.149.183:19 888/jobhistory
 和
 http://bjm6-decare-149181.hadoop.jd.local:50320/cluster/apps
 区别是什么?
+
 

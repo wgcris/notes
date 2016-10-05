@@ -1,0 +1,94 @@
+ 1. 基于linuxcontianer的docker分析
+增加了linuxContainerRuntime，用户获取环境变量，实现linuxcontainer和dockercontainer的切换。
+
+LinuxContainerExuecutor.init
+	...
+	runtime.initialize		设置调用DelegatingLinuxContainerRuntime
+		构造privilegedOperationExecutor对象
+		分别构造DefaultLinuxContainerRuntime对象和DockerLinuxContainerRuntime并进行相应的初始化
+	
+LinuxContainerExuecutor.signalContainer
+	获取一些Context参数
+	构造ContainerRuntimeContext对象
+
+	DelegatingLinuxContainerRuntime.signalContainer
+		pickContainerRuntime				//根据参数判断是否为docker模式，如果yarn.nodemanager.container-executor.class为DockerLinuxContainer则为docker模式
+			根据当前环境变量判断是否选择为docker模式，而选择dockerLinuxContainerRuntime或defaultLinuxContainerRuntime
+		runtime.signalContainer			
+		//因此一下，分两种情况进行分析
+		情况1：defaultLinuxContainerRuntime
+			defaultLinuxContainerRuntime.signalContainer
+				构造SIGNAL_CONTAINER类型的PrivilegedOperation
+				设置参数signalOp
+				executor.executePrivilegedOperation					//构造执行器，然后执行程序
+					getPrivilegedOperationExecutionCommand		//构造命令参数
+						cliSwitch对于SIGNAL_CONTAINER类型的PrivilegedOperation为空的。
+					执行命令，具体会执行container-executor二进制文件。接下来进入main.c分析
+						会进入RUN_AS_USER_SIGNAL_CONTAINER分支
+							set_user										//设置当前程序的执行权限和组权限
+							signal_container_as_user		
+								kill命令，判断kill命令是否是组进程的领头进程或判断对应进程是否存在，如果存在就执行kill命令进程。
+		情况2: dockerLinuxContainerRuntime
+			实际代码同defaultLinuxContainerRuntime
+								
+					
+LinuxContainerExuecutor.launchContainer
+	...
+	linuxContainerRuntime.launchContainer
+		DelegatingLinuxContainerRuntime.launchContainer
+			pickContainerRuntime
+			runtime.launchContainer
+			//分两种情况进行分析:
+			情况1: defaultLinuxContainerRuntime
+				defaultLinuxContainerRuntime.launchContainer
+					... 
+					进入main.c中的RUN_AS_USER_LAUNCH_CONTAINER分支
+						traffic_control_modify_state			//网络控制，这里略
+						set_user
+						launch_container_as_user
+							get_exit_code_file				//获取退出码返回的路径
+							create_script_paths				//创建必要的脚本文件
+							fork创建子进程，父进程进入等待退出码的状态。接下来说明的都是子进程的代码。
+							{		//子进程的代码
+								setsid									//设置当前的进程为新的一组进程的领头进程								
+								write_pid_to_file_as_nm
+									切换用户为nm的用户
+									创建pid_file的tmp文件，权限700
+									将pid写入tmp文件中
+									然后将tmp文件重命名回正常的pid_file格式
+									并将用户切换回原来的用户
+									write_pid_to_cgroup_as_root
+										切换到root用户，将pid写入tasks文件
+									create_local_dirs
+										创建工作目录，并拷贝相应的脚本文件
+									execlp
+										执行脚本文件
+							}
+			情况2: dockerLinuxContainerRuntime
+				dockerLinuxContainerRuntime.launchContainer
+					将docker命令写入临时文件														//注: 这里会自动创建nm-docker-cmds目录，不用手动创建
+					使用LAUNCH_DOCKER_CONTAINER类型的PrivilegedOperation
+					进入main.c的RUN_AS_USER_LAUNCH_DOCKER_CONTAINER分支
+						traffic_control_modify_state
+						set_user
+						launch_docker_container_as_user
+							parse_docker_command_file										//从tmp文件中获取对应的docker命令的参数
+							get_value(DOCKER_BINARY_KEY)								//获取docke可执行文件的名称
+							create_script_paths
+							保存当前的用户id和组id
+							create_local_dirs
+							get_exit_code_file
+							将执行权限切换到root
+							popen				//子进程执行docker命令							//??????测试的时候关注一下工作目录下是否也有脚本文件
+							docker inspect 		//获取pid
+							write_pid_to_cgroup_as_root									// docker也有这个？？？？？需要追踪一下如何设置？？？？？			  Ans: 这里主要为了设置网络和cpu的隔离。与DockerContainerExecutor使用cpu_period等命令限制cpu略有不同。
+							write_pid_to_file_as_nm			//写入pid文件
+							调用docker wait等待
+							调用docker rm删除
+
+main : command provided 4
+main : run as user is yarn
+main : requested yarn user is jd_ad
+Writing to tmp file /data8/yarn1/local/nmPrivate/application_1473328647891_0006/container_1473328647891_0006_01_000001/container_1473328647891_0006_01_000001.pid.tmp
+container_1473328647891_0006_01_000001
+

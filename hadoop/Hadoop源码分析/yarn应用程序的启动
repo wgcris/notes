@@ -12,7 +12,7 @@
 	YarnClient.getQueueInfo
 	YarnClient.getQueueAclsInfo						//获取集群参数，节点报告，队列信息，ACLs等通过rmClient代理调用
 	YarnClient.createApplication					//构造一个客户端控制应用的对象app
-		构造一个提交app的上下文context
+		ApplicationSubmissionContext context = Records.newRecord(ApplicationSubmissionContext.class)			//构造一个提交app的上下文context
 		getNewApplication
 			rmClient.getNewApplication				//调用ResourceManager.clientRM对应函数并返回，具体RM的工作见附录D
 		获取申请的app的id，并用其构造一个客户端控制app的对象YarnClientApplication
@@ -60,7 +60,6 @@ ClientRMService::submitApplication
 		this.rmContext.getDispatcher().getEventHandler().handle							//实际是调用ResouceManager.rmDispatcher处理事件
 			这里处理了RMAppEventType.START事件，最终会调用ApplicationEventDispatcher::handler处理事件。内部会找到这个APP应用实例(RMAppImpl对象)，然后调用其handle函数继续处理。然后发现在RMAppImpl内部是它的有限状态机处理的，传入的时间是RMAppEventType.START事件。由于RMAppImpl开始的状态是NEW,经过RMAppEventType.START事件，通过RMAppNewlySavingTransition.transition函数(是保存状态的过程,详细见附录G)，会变为NEW_SAVING状态。(注:RMAppNewlySavingTransition.transition函数的操作是)
 
-
 	构造一个response对象，并返回。						//发现构造的respponce对象都没有传入参数，那么怎样区别不同的response?????
 	
 	
@@ -77,48 +76,174 @@ FairScheduler在初始化的时候有组件schedulingThread，ContinuousScheduli
 ContinuousSchedulingThread.run
 	continuousSchedulingAttempt
 		从nodes中构造出一组NodeId的列表nodeIdList
-		然后将nodeIdList排序，即讲nodeIdList按照大小的顺序排序。
+		然后将nodeIdList排序，即将nodeIdList按照大小的顺序排序。
 		遍历nodeIdList，一依次执行下面的步骤
 			根据NodeId获取FSSchedulerNode对象						//实际就是nodes的value值，已经在NM向RM注册的时候设置
 			如果配置的最小资源不大于节点有可利用的资源
-				attemptScheduling
-					...			//暂时不考虑保留的app
-					queueMgr.getRootQueue().assignContainer(node).equals(Resources.none())		
-						//利用队列管理分配Container，如果节点之前没有使用，就设置统计数据。这里需要重点分析assignContainer。
-						FSParentQueue::assignContainer
-							检查资源是否满足要求。即子队列的资源是否超过最大要求。
-							然后按照FairSharePolicy(按照实际的资源与最小要求的比例排列)的方式重新排列当前节点下的所有childQueues。
-							然后遍历下面的所有childQueues，继续"递归"。(递归树，有的会调入到叶子节点，调用FSLeafQueue::assignContainer)
-							当有一个叶子节点的资源返回为非NONE(非叶子节点必然会返回NONE)且所在队列符合容量限制要求的时候，就可以返回了，完成了分配contaner工作。
-							注:	FSLeafQueue::assignContainer说明					//可以清晰的看到队列-->app的层次分配
-								检查资源是否超过设置
-								将叶子节点下面的app进行排序									//只有当存在app(即runnableApps不为空)的时候才进行分配
-								然后遍历节点，调用assignContainer，返回资源assigned，不为空就返回。
-								FSAppAttempt::assignContainer							//只有当前app有在当前节点可分配的Container才进行分配
-									FSAppAttempt::assignContainer(两个参数)
-										...				//经过一些列处理请求的工作
-										FSAppAttempt::assignContainer(四个参数)
-											获取请求的capability
-											获取节点可用的capability
-											FSAppAttempt::createContainer，构造一个Container
-												分配一个ContainerId
-												分配并设置一个Container
-											如果节点能满足申请的资源的要求
-												FSAppAttempt::allocate							//构造AMContainer对象
-													...									//一些检查工作
-													构造RMContainer对象rmContainer			//初始状态为NEW
-														设置参数，读写锁
-														rmContext.getRMApplicationHistoryWriter().containerStarted						//?????暂时不考虑
-														rmContext.getSystemMetricsPublisher().containerCreated								//?????暂时不考虑
-													将rmContainer加入到newlyAllocatedContainers和liveContainers
-													构造resourceRequestList，里面是这里请求的资源
-													将消耗的资源假如到currentConsumption中
-													处理RMContainerEventType.START事件
-														RMContainerState.NEW==(RMContainerEventType.START,ContainerStartedTransition)==>RMContainerState.ALLOCATED 
-													返回RMContainer对象
-												SchedulerNode::allocateContainer
-													把RMContainer对象加入到SchedulerNode::launchedContainers中
-											如果节点不满足要求，就执行保留工作(暂不分析)。
+				attemptScheduling						//这里为主要的调度功能，如果没有开启ContinuousSchedulingThread请忽略前面的内容。该函数会通过心跳触发，因此唯一的参数就是发来心跳的节点
+					检查节点是否还在nodes中，防止不必要的调度
+					检查该节点是否有预留应用，通过FSSchedulerNode这个类可以看出一个节点最多仅可以预留一个应用，通过FSSchedulerNode的父类SchedulerNode可知，一个节点最多可以预留一个应用。
+					如果节点上有预留的应用
+						获取reserve优先级和队列
+						hasContainerForNode						//检查节点上是否有足够的资源为这个应用使用
+							getResourceRequest					//getResourceRequest获取的是AppSchedulingInfo的资源请求。其中SchedulerApplicationAttempt.appSchedulingInfo.requests会记录该应用的所有资源请求.会根据priority和resourceName分组存储。是一个二维的map。
+																					//这里调用了三组getResourceRequest，分别获取该应用下的reserver优先级下的任意资源anyRequest，同rack资源rackRequest，同node资源nodeRequest
+							检查是否该节点能满足这个应用的container请求。需要保证以下条件同时成立:
+								(1) anyRequest不为null，且大小不为0
+								(2) anyRequest.getRelaxLocality为true或存在rackRequest。  注: 这个anyRequest的relaxlocality如果为false，必须保证有rack资源，否则无法分配
+								(3) rackRequest为null或rackRequest的relaxlocality为false或node请求不为空
+								(4) anyRequest的请求的资源满足该节点的可用资源量
+								注:某个应用程序的rack1资源请求的relaxLocality设为false的含义是YARN不会为该应用程序的分配rack1上的任何资源
+						假如节点上没有有足够的资源或队列无法满足资源要求
+							unreserve
+								getReservedContainer		//获取当前节点reserve的container
+								unreserveInternal				//主要将应用的FSAppAttempt.reservedContainers清空
+								unreserveResource				//清空节点的reserver资源
+								metric相关
+							置为reservedAppSchedulable为null
+						假如节点上有足够的资源且队列满足资源要求
+							node.getReservedAppSchedulable().assignReservedContainer				//这注意assignReservedContainer和assignContainer(2参数和4参数)是FSAppAttempt的函数，这类函数属于应用级别在node上分配资源的操作。
+								得到当前节点的reserved的container，并获取其优先级
+								做了一些检查工作
+								assignContainer(node, true)									//注意这里为FSAppAttempt的方法，因此属于应用级别的
+									prioritiesToTry				//这里为由于是分配reservercontainer，所以为
+									假如没有优先级为prioritiesToTry的请求且节点没有container可以供分配，就退出当前循环
+									addSchedulingOpportunity(priority)				//增加priority下的资源的调度机会，怎么用的?????
+									如果getLiveContainers为0且为UnmanagedAM模式。这说明该congainer是AM的container
+										canRunAppAM																//检查是否可以运行AM，这里不仅是队列资源的检查，还有AM占队列资源比例的检查。
+									获取对应优先级下的同机架资源请求和同node资源请求
+									allowedLocality=getAllowedLocalityLevelByTime							//如果开启了ContinuousScheduling执行这个调用，否则执行下面的
+										传入参数为优先级,nodeLocalityDelayMs(由yarn.scheduler.fair.locality-delay-node-ms决定，默认-1),yarn.scheduler.fair.locality-delay-rack-ms的参数(默认-1)，当前时间
+										如果nodeLocalityDelayMs和rackLocalityDelayMs小于0，返回NodeType.OFF_SWITCH，表示可以被调度到任何节点。
+										如果之前不存在优先级的的消息的资源本地性配置，就创建并默认返回NodeType.NODE_LOCAL。
+										如果该优先级设置为NodeType.OFF_SWITCH，就直接返回NodeType.OFF_SWITCH。
+										计算上次调度到现在的时间waitTime
+										如果waitTime达到对应的阀值(两个阀值)，就从NodeType.NODE_LOCAL降到NodeType.RACK_LOCAL或从NodeType.RACK_LOCAL降到NodeType.OFF_SWITCH										
+									allowedLocality=getAllowedLocalityLevel										
+										//返回资源本地化级别。默认为NODE_LOCAL，如果调度次数达到一定次数(线上的次数为节点个数)，就会降级。依次NodeType.RACK_LOCAL,NodeType.OFF_SWITCH										
+										//操作几乎与allowedLocality一致，只是降级的标准为调度次数，即为心跳包发来的次数。
+									假如rackLocalRequest和localRequest不为空										
+										assignContainer(node, localRequest,NodeType.NODE_LOCAL, reserved)
+									rackLocalRequest为空且本地松弛型为false，就退出分配循环。
+									假如rackLocalRequest不为空且allowedLocality为NodeType.RACK_LOCAL，或allowedLocality为NodeType.OFF_SWITCH						//对于RACK_LOCAL或OFF_SWITCH类型的均可以使用RACK_LOCAL参数分配
+										assignContainer(node, rackLocalRequest,NodeType.RACK_LOCAL, reserved)
+									如果不是ResourceRequest.ANY级别的资源的本地松弛型为false
+										assignContainer(node, offSwitchRequest, NodeType.OFF_SWITCH, reserved)
+									注: 这里上面，可能会调用三个assignContainer(4参数)中的一个，下面分析这个函数，不以某个特烈的分析问题。
+										assignContainer(node, offSwitchRequest, NodeType.OFF_SWITCH(RACK_LOCAL,NODE_LOCAL), true)
+											首先获取该应用发来的请求的资源量capability
+											获取当前节点的可用资源量
+											目前这里是reserve，则获取得到被reserve的container
+											假如该节点的可用资源量能够满足当前请求的最大资源量
+											allocate
+											.......			同下，仅仅是对于reserve的不再创建container，而是获取之前被reserve的container
+																		
+
+					假如没有预留资源。			//这里可能是一开始节点就没有预留了资源，也可能是之前该节点有预留资源，但是那个节点无法满足预留资源的要求或资队列不符合要求后别unreserve的
+						queueMgr.getRootQueue().assignContainer(node)						//这里会根据maxAssign设置决定调用次数，具体流程这了简化了
+																							//注意，这个assignContainer仅仅有一个参数，意思就是仅仅制定在node上这个节点进行分配container，并没有制定具体应用，而是针对队列进行分配的。
+							queueMgr.getRootQueue().assignContainer								//显然这个一个递归的操作，从队列的根节点一次进行assignContainer操作。因此需要分析从队列父节点到叶子节点的assignContainer函数。
+																																		//下面分头分析
+								FSParentQueue.assignContainer
+									assignContainerPreCheck			//getResourceUsage会计算当前队列下所有子队列的使用的资源。如果总资源使用量超过配置的最大值且有可预留的资源，返回Resources.none，表示无法再该队列的该节点分配资源。
+																							//这里有一步性能的损耗。如果存在节点上有预留资源就不能分配这样的设置，就没有必要每次便利都检查预留资源，应该先检查预留资源，没有预留资源在进行操作?????可修复的patch?????
+									排列下面所有childQueues		 		//FairSharePolicy.FairShareComparator类定义。这里摘一段注释介绍规则:
+																						  //(1)低于minshare的比高于minshare的更可能被调度。(2)同时低于minshare的情况，哪个低于minshare的百分比越大哪个先调度。
+																							//(3)同时高于minshare的按照runningTasks/weight调度.... 待看...
+																							//注意，这里与minshare比较的是demand，demand从何而来待会分析?????
+									便利childQueues继续执行assignContainer				//如果仍然是FSParentQueue继续执行上述操作，否则调用FSLeafQueue
+								FSLeafQueue.assignContainer
+									assignContainerPreCheck			//同上
+									排列下面所有runnableApps			//稍后这里关注一下,具体应用的排列规则，关系到某些应用合适调度，会影响pending?????
+									遍历runnableApps，检查如果该节点不再黑名单下，执行FSAppAttempt.assignContainer，只有有一个应用分配成功就会立即返回。								//重新理解黑名单，为什么要应用级别增加黑名单?????不应该绑定node吗?????																		
+								FSAppAttempt.assignContainer
+									FSAppAttempt.assignContainer(node, false)					
+									//该函数之前分析过，这是这里reserved变为false，这里遍历所有优先级的请求，而不仅仅是reserver级别的请求。这里跳过其他描述，直接进入assignContainer
+									assignContainer(node, offSwitchRequest, NodeType.OFF_SWITCH(RACK_LOCAL,NODE_LOCAL), false)
+										首先获取该应用发来的请求的资源量capability
+										获取当前节点的可用资源量
+										createContainer					//与reserve的区别，这里是创建一个Container，而不是
+										假如满足资源要求
+											FSAppAttempt.allocate
+												获取允许的NodeType等级allowed，从allowedLocalityLevel获取对应优先级的NodeType等级。getAllowedLocalityLevel会更新
+												创建RMContainer对象
+												加入到newlyAllocatedContainers列表中
+												加入到liveContainers列表中
+												appSchedulingInfo.allocate					//更新一些请求信息，metric等
+												给新创建的RMContainer发送类型为RMContainerEventType.START的RMContainerEvent
+											如果是reserve就unreserve
+											node.allocateContainer
+												加入到launchedContainers
+											更新AM资源利用率
+											设置amRunning
+										假如不满足资源要求,就保留资源
+
+
+关于上面对FSParentQueue,FSLeafQueue,FSAppAttempt排序算法的分析，默认使用FairSharePolicy算法进行比较。
+FSParentQueue,FSLeafQueue,FSAppAttempt这三个类都实现了Schedulable接口
+由于进行排序比较的时候需要getMinShare，getDemand，getResourceUsage，getWeights
+(1) FSParentQueue
+	getMinShare				由父类FSQueue实现，是fair-scheduler.xml设置的最小资源量。
+	getDemand					有FSParentQueue.demand字段决定
+
+(2) FSLeafQueue			
+	getMinShare				由父类FSQueue实现，是fair-scheduler.xml设置的最小资源量。
+	
+(3) FSAppAttempt
+	getMinShare				为Resources.none()
+	
+
+UpdateThread线程:									
+	update					//由参数yarn.scheduler.fair.update-interval-ms设置时间间隔，默认是500ms
+		updateStarvationStats				//更新饥饿状态，与抢占相关
+		获取rootQueue
+		rootQueue.updateDemand			//一个遍历树的过程，从FSParentQueue到FSLeafQueue再到FSAppAttempt层次的遍历
+			FSParentQueue.updateDemand会遍历所有子队列执行updateDemand，然后将子队列的demand加在一起为自己的demand。
+			FSParentQueue.updateDemand会遍历runnableApps和nonRunnableApps执行updateDemand，然后将这些应用的demand加在一起为自己的demand。
+			FSAppAttempt.updateDemand会遍历各个优先级下的资源请求，然后累加后得到其demand，资源请求来自于FairScheduler.allocate的申请。
+		rootQueue.setFairShare			//设置根队列的fairShare为clusterResource。clusterResource在增加节点，删除节点，更新节点的时候会修改，表示集群的总资源量。
+		rootQueue.recomputeShares
+			这个从根队列开始进行计算fairshare。与updateDemand自下向上累加不同，这个是自上向下分配fair			//详细见"RM调度器分析"			
+		updateRootQueueMetrics
+		记录update调用的时间到metric
+											
+/*----------------------------------之前的分析 begin----------------------------------*/
+								检查资源是否满足要求。即子队列的资源是否超过最大要求。
+								然后按照FairSharePolicy(按照实际的资源与最小要求的比例排列)的方式重新排列当前节点下的所有childQueues。
+								然后遍历下面的所有childQueues，继续"递归"。(递归树，有的会调入到叶子节点，调用FSLeafQueue::assignContainer)
+								当有一个叶子节点的资源返回为非NONE(非叶子节点必然会返回NONE)且所在队列符合容量限制要求的时候，就可以返回了，完成了分配contaner工作。
+								注:	FSLeafQueue::assignContainer说明					//可以清晰的看到队列-->app的层次分配
+									检查资源是否超过设置
+									将叶子节点下面的app进行排序									//只有当存在app(即runnableApps不为空)的时候才进行分配
+									然后遍历节点，调用assignContainer，返回资源assigned，不为空就返回。
+									FSAppAttempt::assignContainer							//只有当前app有在当前节点可分配的Container才进行分配
+										FSAppAttempt::assignContainer(两个参数)
+											...				//经过一些列处理请求的工作
+											FSAppAttempt::assignContainer(四个参数)
+												获取请求的capability
+												获取节点可用的capability
+												FSAppAttempt::createContainer，构造一个Container
+													分配一个ContainerId
+													分配并设置一个Container
+												如果节点能满足申请的资源的要求
+													FSAppAttempt::allocate							//构造AMContainer对象
+														...									//一些检查工作
+														构造RMContainer对象rmContainer			//初始状态为NEW
+															设置参数，读写锁
+															rmContext.getRMApplicationHistoryWriter().containerStarted						//?????暂时不考虑
+															rmContext.getSystemMetricsPublisher().containerCreated								//?????暂时不考虑
+														将rmContainer加入到newlyAllocatedContainers和liveContainers
+														构造resourceRequestList，里面是这里请求的资源
+														将消耗的资源假如到currentConsumption中
+														处理RMContainerEventType.START事件
+															RMContainerState.NEW==(RMContainerEventType.START,ContainerStartedTransition)==>RMContainerState.ALLOCATED 
+														返回RMContainer对象
+													SchedulerNode::allocateContainer
+														把RMContainer对象加入到SchedulerNode::launchedContainers中
+												如果节点不满足要求，就执行保留工作(暂不分析)。
+/*---------------------------------- 之前的分析 end ----------------------------------*/												
+												
+												
 
 综上所述: 
 	资源调度器会维护一个后台进程，会不断地循环的遍历队列的列表(外层还有node的遍历，主要是不断地分配node的资源给队列)，然后分配资源。
@@ -212,7 +337,6 @@ rmDispatcher处理SchedulerEventType.APP_ATTEMPT_ADDED
 							queue.getMetrics().submitAppAttempt					//QueueMetrics::submitAppAttempt
 								appsPending++
 								获取用户的QueueMetrics
-								????? 没看懂 ????? 为啥递归
 							向rmDispatcher发送RMAppAttemptEventType.ATTEMPT_ADDED事件
 								
 rmDispatcher发送RMAppAttemptEventType.ATTEMPT_ADDED
@@ -222,24 +346,30 @@ rmDispatcher发送RMAppAttemptEventType.ATTEMPT_ADDED
 				rmAppAttempt::handle
 					RMAppAttemptState.SUBMIT状态==(RMAppAttemptEventType.ATTEMPT_ADDED事件，ScheduleTransition)==> RMAppAttemptState.LAUNCHED_UNMANAGED_SAVING,RMAppAttemptState.SCHEDULED //根据调度情况返回不同状态
 						ScheduleTransition::transition
-							1) subCtx.getUnmanagedAM返回false							//getUnmanagedAM分析?????
+							1) subCtx.getUnmanagedAM返回false							//getUnmanagedAM分析?????							subCtx为客户端client.submitApplication的结果
 								根据请求的上下文设置appAttempt.amReq，为AM申请。
-									appAttempt.scheduler.allocate
-										FairScheduler::allocate					//这个allocate执行了吗???觉得应该是在后面的调用生效?????待重新看
+									appAttempt.scheduler.allocate							//注意这个allocate的调度的为FSAppAttempt对象application，即这里已经更行该AM对应的application
+										设置AM资源请求appAttempt.amReq为Container数目为1，优先级为AM_CONTAINER_PRIORITY，资源名字为*，RelaxLocality为true
+										FairScheduler::allocate					//这里传入appAttemptId和ask等，其中ask为AM的资源请求。后三项为空。
 											得到对应的FSAppAttempt
 											normalizeRequests，猜测是使请求的参数正常化。
-											设置AM的资源能力
-											releaseContainers											//这时候应该没有释放的，暂时不考虑
+											如果不是unmananagedam，且只请求一个container且liveContainers为空，就设置AM的资源能力，即设置SchedulerApplicationAttempt.amResource，资源可以在客户端提交任务的时候设置。
+											releaseContainers											//启动AM的Container的时候传入的要release的contaienr为NULL，这里实际没有做任何操作。
+											showRequests													//打印了各个优先级下的各个资源的请求信息。不过必须开启log4j的debug才能查看打印信息。
 											updateResourceRequests								//这些资源请求的信息记录于FSAppAttempt中
 												appSchedulingInfo.updateResourceRequests							
 													构造请求到requests中，	类型为Map<Priority, Map<String, ResourceRequest>>。第一层的key为优先级，第二层的key为资源名称(?????),第二层的value为资源请求。
-											设置抢占的的容器id,一起放到FSAppAttempt.preemptionMap中				//启动am，咱是不考虑
-											更新黑名单														//设置为null，启动am时候暂时不考虑
-											pullNewlyAllocatedContainersAndNMTokens											
-												token相关操作
-											设置	FSAppAttempt的headroom						//资源相关
+													...
+													最后会更新pending相关
+											showRequests
+											开启debug会打印一些信息，注意这里打印了getCurrentReservation和getPreemptionContainers
+											设置抢占的的容器id,一起放到FSAppAttempt.preemptionMap中				//暂不分析抢占
+											application.updateBlacklist					//更新黑名单，这里为空，不进行实际的操作
+											pullNewlyAllocatedContainersAndNMTokens										 //
+												对newlyAllocatedContainers中的Container设置token																//newlyAllocatedContainers是assginContainer中设置的，并且在attemptScheduling这里会调用。attemptScheduling会在心跳等过程调用。												
+												为正常分配到token的container发送RMContainerEventType.ACQUIRED
+											设置FSAppAttempt的headroom								//资源相关
 											返回Allocation对象														
-												调用rmContainer.handle处理RMContainerEventType.ACQUIRED
 							2) subCtx.getUnmanagedAM返回true								//这个是AM直接从客户端启动的流程，这里暂时不考虑
 								...			//客户端直接启用的am，RM需要保存他的状态
 
@@ -260,8 +390,7 @@ rmDispatcher发送RMAppAttemptEventType.ATTEMPT_ADDED
 					pullNewlyAllocatedContainersAndNMTokens
 						处理token
 						RMContainerImpl.handle处理RMContainerEventType.ACQUIRED事件
-							状态机处理RMContainerEventType.ACQUIRED事件				
-										
+							状态机处理RMContainerEventType.ACQUIRED事件
 						pullNewlyAllocatedContainersAndNMTokens
 					...			
 				设置appAttempt的masterContainer，提交上下文。
@@ -305,6 +434,7 @@ rmDispatcher处理RMAppAttemptEventType.ATTEMPT_NEW_SAVED事件
 						appAttempt.launchAttempt
 							向rmDispatcher发送AMLauncherEventType.LAUNCH事件
 
+后台进程:
 rmDispatcher处理AMLauncherEventType.LAUNCH事件
 	applicationMasterLauncher.handle
 		进入LAUNCH分支
@@ -812,10 +942,7 @@ ApplicationMasterService.allocate
 	rScheduler.allocate
 		FairScheduler.allocate				//前面简略分析了(仍需要详细分析)，使用FairSchedule中分配资源
 	设置响应allocateResponse(包括资源分配结果)并返回
-	
-FairScheduler.allocate之后，调度器的后台进程会启动一个RMContainer,然后又会通过心跳发送一个个
-！！！！！！！！！！！！！！！！！！！！！！！！！！！！到这里了！！！！！！！！！！！！！！！！！！！！！！！！！！！！
-
+	// 之后的过程同申请第一个Container
 
 rmDispatcher处理RMAppAttemptEventType.STATUS_UPDATE事件		
 	ApplicationAttemptEventDispatcher.handle
@@ -824,15 +951,22 @@ rmDispatcher处理RMAppAttemptEventType.STATUS_UPDATE事件
           更新appAttempt.progress，表示进度?????
 					AMLivelinessMonitor.receivedPing
 					
+一个Record构造的分析
+以下面代码为例子
+ApplicationSubmissionContext context = Records.newRecord(ApplicationSubmissionContext.class)
+	factory=RecordFactoryProvider.getRecordFactory
 
 
+	factory.newRecordInstance
+		根据yarn.ipc.record.factory.class得到一个recordFactoryClassName，即一个方法的类名。默认使用org.apache.hadoop.yarn.factories.impl.pb.RecordFactoryPBImpl。
+		getFactoryClassInstance
+	
+An unmanagedAM is an AM that is not launched and managed by the RM.	
 
-
-
-
-
-
-
-
+		
+		
+		
+		
+(1) 心跳时间间隔分布
 
 

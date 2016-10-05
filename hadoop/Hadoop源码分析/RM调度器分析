@@ -90,7 +90,7 @@ FairScheduler.serviceInit
 			获得MetricsSystem,这是一个单例的系统
 			从静态map的queueMetrics获取名字为root的QueueMetrics，如果没有就创建。这里的目的就是给root创建一个QueueMetrics，并注册到queueMetrics。
 		fsOpDurations				//获取一个单例的FSOpDurations对象，这个类的含义?????
-		初始化applications		
+		初始化applications
 		构造FairSchedulerEventLog对象并初始化
 		构造AllocationConfiguration对象，猜测是root队列的资源配置信息。
 		queueMgr.initialize			//初始化队列管理器

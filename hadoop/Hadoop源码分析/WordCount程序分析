@@ -121,35 +121,284 @@ WordCount::main
 2.2 MRAppMaster的分析
 main
 	Thread.setDefaultUncaughtExceptionHandler				//设置uncaugth的异常
-	
-
-
-
-
-
-
-
-
-
-
-
-	...
+	从环境变量中读取containerIdStr										//应该是启动AM这个container的名称
+	从环境变量中读取nodeHostString
+	从环境变量中读取nodePortString
+	从环境变量中读取nodeHttpPortString
+	从环境变量中读取appSubmitTimeStr									// app提交的时间							?????待会看看启动脚本是否设置了这些
+	检查工作
+	获取applicationAttemptId
+	构造MRAppMaster对象																//仅仅设置了一些参数，主要是之前环境变量读出来的那些
+	addShutdownHook																	//增加了一个hook，检查外界信号，打印适当的中断信息。暂不深入
+	将job.xml读到配置中
+	MRWebAppUtil.initialize													// MR的web界面
+		setHttpPolicyInYARN
+		setHttpPolicyInJHS
+	读取环境变量的用户名，并设置到配置中
 	initAndStartAppMaster
-		appmaster.init
-			serviceInit					//间接调用
-				开启各种服务，注册handler等。
-		appMaster.start
-			serviceStart				//间接调用
-			设置containerAllocator					//非uber模式，使用了类RMContainerAllocator
-				RMContainerAllocator::serviceInit				//间接调用,简单配置
-				RMContainerAllocator::serviceStart
-					配置一个线程类，有一个while循环，不断地从事件队列中取事件，
-						handleEvent			//并处理事件,根据事件处理
-							如果是CONTAINER_REQ事件，检查Capability，满足增加为map
-							如果是CONTAINER_DEALLOCATE事件，释放资源
-							如果是CONTAINER_FAILED事件，...
-					然后启动该线程类
+		...			//token,ugi相关，暂时略
+		appMaster.init
+			appMaster.serviceInit
+				createJobClassLoader											//创建类加载器jobClassLoader
+				设置DISPATCHER_EXIT_ON_ERROR_KEY为true			//稍后分析?????
+				initJobCredentialsAndUGI									//暂不分析
+				构造RunningAppContext对象context
+				获取appName
+				获取jobId
+				根据mapreduce.job.reduces获取reuce的数目numReduceTasks，默认是0
+				如果numReduceTasks为0且map会reduce使用新的api，则设置newApiCommitter为true							//?????跟reduce的数目有什么关系?????
+				获取user和stagingDir，然后是一写检查工作吧，在一个try{}中，这里暂缓分析
+				构造dispatcher
+				构造createJobHistoryHandler并注册到dispatcher
+				createStagingDirCleaningService构造StagingDirCleaningService对象并注册
+				createContainerAllocator										//构造组件containerAllocator
+				注册containerAllocator到dispatcher
+				如果处于copyHistory阶段，就启动JobHistoryCopyService服务
+				如果不是copyHistory阶段阶段，也就是正常的流程
+					构造clientService
+					构造committerEventHandler
+					构造taskAttemptListener
+					构造historyService
+					构造speculatorEventDispatcher
+					构造containerLauncher
+		appMaster.start		
+			appMaster.serviceStart
+				构造amInfos
+				processRecovery
+					判断如果attempt号为1，不用恢复
+					根据配置项yarn.app.mapreduce.am.job.recovery.enable判断是否开启了am的recovery功能，默认为开启。
+					获取recoverySupportedByCommitter，判断是否支持recovery，暂时好像不支持
+					获取numReduceTasks
+					... token
+					由于暂时不支持，所有不继续分析	
+				构造AMInfo对象amInfo
+				createJob					
+					构造一个Job，类型为JobImpl
+					为dispatcher增加一个JobFinishEvent事件和处理句柄，主要为job完成的处理工作
+				然后为之前的AM发送信号						//这里暂时不分析，稍后分析它的作用?????
+				然后给当前的am发送JobHistoryEvent事件																			//是JH相关事件发起的标志，稍后分析!!!!!
+				发送JobEventType.JOB_INIT事件
+				发送SpeculatorEvent事件
+				clientService.start
+					MRClientService.serviceStart
+						构造了一个rpc的server，并启动，这个组件是专MR的AM端专门为client端服务，为client提供查看作业状态，控制作业的接口。
+				如果初始化没有失败，会调用startJobs
 				startJobs
+					发送JobStartEvent事件。
+					
+					
+3. MR的有限状态机及事件处理
+截止到这里，简单的流程已经分析完成。接下来从发送事件的角度分析。主要是以下三个事件。
+(1) JobHistoryEvent事件
+(2) JOB_INIT事件
+(3) JobStartEvent事件
+
+3.1 JobHistoryEvent事件处理
+	appMaster.serviceStart函数中会发送JobHistoryEvent事件，第二个参数为AMStartedEvent事件
+	这里会交给JobHistoryEventHandler.handle处理
+	JobHistoryEventHandler.handle
+		调整maxUnflushedCompletionEvents的值
+		把事件放入eventQueue队列中，在JobHistoryEventHandler.serviceStart中处理，然后调用handleEvent处理事件
+		handleEvent
+			这里为AM_STARTED事件
+			setupEventWriter
+			...				//一些jobhistory的处理事件，暂时不分析
+			
+3.2 JOB_INIT事件处理
+	JOB_INIT事件会交给JobEventDispatcher处理
+		JobEventDispatcher.handle
+			context.getJob(event.getJobId())).handle(event)		//其中context为RunningAppContext
+				根据jobid得到对应的job后，调用其handle函数处理事件
+				JobImpl.handle
+					进入状态机处理。由于初始化Job状态机状态为JobStateInternal.NEW
+					JobStateInternal.NEW==(JOB_INIT,InitTransition)==>JobStateInternal.INITED
+					InitTransition.transition
+						构造JobContextImpl对象
+						setup						//一些准备工作，设置目录，token等
+						设置job.fs			//这里为hdfs文件系统
+						构造JobSubmittedEvent事件，并封装到JobHistoryEvent中并发送				!!!!!继续分析!!!!!
+						createSplits		//读取split信息
+						得到map和reduce的个数
+						checkTaskLimits				//暂时没做任何工作
+						计算inputLength，调用makeUberDecision决定是否使用uber模式					//暂不考虑uber模式
+						...										//配置一些参数，暂不分析
+						createMapTasks
+							构造一系列的MapTaskImpl加入到mapTasks中
+						createReduceTasks
+							构造一系列的ReduceTaskImpl加入到reduceTasks中
+						返回JobStateInternal.INITED状态。如果有异常，会维持JobStateInternal.NEW状态。
+
+3.3 JobStartEvent事件
+	JobStartEvent事件会交给JobEventDispatcher处理
+		JobEventDispatcher.handle
+			JobImpl.handle
+				JobStateInternal.INITED==(JOB_START,StartTransition)==>JobStateInternal.SETUP
+				StartTransition.transition
+					如果是恢复的job，就设置starttime为之前的开始时间，否则设置为当前时间。
+					构造JobInitedEvent封装到JobHistoryEvent，并发送
+					构造JobInfoChangeEvent封装到JobHistoryEvent，并发送
+					发送CommitterJobSetupEvent事件
+									
+	处理CommitterJobSetupEvent事件
+		CommitterEventHandler.handle
+			添加到eventQueue队列中在serviceStart中处理
+			launcherPool.execute										//使用EventProcessor处理
+				EventProcessor.run
+					进入JOB_SETUP分支，handleJobSetup
+					handleJobSetup
+						committer.setupJob								//这里为FileOutputCommitter
+							构造jobAttemptPath，并创建相应的目录		//hdfs上的目录
+						发送JobSetupCompletedEvent事件
+
+	处理JobSetupCompletedEvent事件
+		JobStateInternal.SETUP==(JobEventType.JOB_SETUP_COMPLETED,SetupCompletedTransition)==>JobStateInternal.RUNNING,
+    SetupCompletedTransition.transition
+    	设置job.setupProgress为1
+    	job.scheduleTasks(job.mapTasks, job.numReduceTasks == 0)				//对于wordcount，第二个参数必然为false
+    		加入有已经完成的task，会发送TaskRecoverEvent				//这里暂时不考虑recovery模式，暂不分析
+				如果不是已完成的task，会发送TaskEvent，类型为TaskEventType.T_SCHEDULE
+			job.scheduleTasks(job.reduceTasks, true)
+				同上。				//这里根据map和reduce的数目发送类型为TaskEventType.T_SCHEDULE的TaskEvent
+			如果map和reduce的数目都为0，就发送JOB_COMPLETED事件
+
+	处理类型为TaskEventType.T_SCHEDULE的TaskEventType事件
+		TaskEventDispatcher.handle					//注: 下面的task是在createMapTasks和createReduceTasks创建的,对应的类分别为MapTaskImpl和ReduceTaskImpl
+			获取收到事件对应的task								//对于map为MapTaskImpl，对于reduce为ReduceTaskImpl,但执行的handle函数实际为父类TaskImpl的handle
+			TaskImpl.handle
+				进行状态转换，TaskImpl的状态为TaskStateInternal.NEW
+					TaskStateInternal.NEW==(TaskEventType.T_SCHEDULE,InitialScheduleTransition)==>TaskStateInternal.SCHEDULED, 
+        	InitialScheduleTransition.transition
+        		addAndScheduleAttempt
+        			addAttempt
+        				createAttempt						//构造TaskAttemptImpl对象
+        				增加TaskAttemptImpl到attempts中
+							将新的Attempt增加到inProgressAttempts
+							加入有失败的就发送类型为TaskAttemptEventType.TA_RESCHEDULE的TaskAttemptEvent事件，这里暂时不考虑有失败的情况
+							没有失败的发送类型为TaskAttemptEventType.TA_SCHEDULE的TaskAttemptEvent事件
+						更新scheduledTime
+						sendTaskStartedEvent
+							构造TaskStartedEvent封装成JobHistoryEvent，并发送信号					//JH的信号处理暂时不分析
+
+	处理类型为TaskAttemptEventType.TA_SCHEDULE的TaskAttemptEvent的事件
+		这里对于TaskAttemptImpl的初始状态为TaskAttemptStateInternal.NEW				
+			TaskAttemptStateInternal.NEW==(TaskAttemptEventType.TA_SCHEDULE,RequestContainerTransition(false))==>TaskAttemptStateInternal.UNASSIGNED,
+       	RequestContainerTransition.transition
+					发送SpeculatorEvent事件
+					这里传入的rescheduled为false，所以发送ContainerRequestEvent事件，类型为ContainerAllocator.EventType.CONTAINER_REQ
+					
+	处理ContainerAllocator.EventType.CONTAINER_REQ类型的ContainerRequestEvent事件
+		最终会交给MRAppMaster的组件containerAllocator执行
+			ContainerAllocatorRouter.handle		
+				containerAllocator.handle							//containerAllocator的类型为RMContainerAllocator
+					将事件写入eventQueue队列待serviceStart中循环读取事件，通过handleEvent处理
+					handleEvent
+						这里仅需要分析CONTAINER_REQ分支
+						getMaxContainerCapability							//获取资源最大值，RMContainerAllocator就是一个RMContainerRequestor的子类,调用父类RMCommunicator.getMaxContainerCapability。是与RM通信调用的registerApplicationMaster得到的资源信息(可参见SimpleAppMaster.java)
+						如果是map的话，会做一些检查工作，具体暂不分析
+						设置memory和cpu核心数
+						scheduledRequests.addMap
+							这里遍历了host和rack，稍后详细分析这两个参数的来源后再深入?????
+							构造ContainerRequest，放入map中
+							addContainerReq								//很明显对应于SimpleAppMaster.java的申请资源的过程
+								addResourceRequest					
+									构造remoteRequest
+									addResourceRequestToAsk		//RMContainerRequestor的ask字段是怎么回事
+	截止到这里，TaskAttempt向ContainerAllocator发送请求，ContainerAllocator然后先RM申请资源，然后等待，通过心跳查看是否分配到资源。
+									
+
+	RMCommunicator.startAllocatorThread会启动心跳服务heartbeat，子类RMContainerAllocator中实现了heartbeat。从这里开始分析:
+		getResources					//获取被分配资源的container，稍后需要详细分析?????
+		scheduledRequests.assign		
+		更新已经完成map和reduce数目等参数
+		scheduleReduces			
+			...									//一些检查工作
+			获取被分配container的地址allocatedHost
+			检查是否在黑名单中
+			assignContainers
+				遍历container
+					assignWithoutLocality
+						调用assignToFailedMap或assignToReduce，从map和reduce中将ContainerRequest拿去
+					containerAssigned						//加入container已经assigned的操作
+						发送TaskAttemptContainerAssignedEvent事件
+						将分配到container和attemptid写入到assignedRequests
+				assignMapsWithLocality
+					根据container找到对应的host，然后对host下所有的TaskAttempt操作。调用containerAssigned标记assinged，发送信号。这个步骤实质上就是在同一台机器启动container。发送JobCounterUpdateEvent事件。
+					匹配同机架的container
+					匹配剩余的																			// 这个过程发生了什么????? container是哪一步与host联系到一块的?????
+			释放不能分配的container
+
+	处理TaskAttemptContainerAssignedEvent事件
+		前面分析可以知道，containerallocator处理心跳包后分配container的时候，对已经分配的container对会发送TaskAttemptContainerAssignedEvent事件
+		TaskAttemptStateInternal.UNASSIGNED==(TaskAttemptEventType.TA_ASSIGNED,ContainerAssignedTransition)==>TaskAttemptStateInternal.ASSIGNED
+		ContainerAssignedTransition.transition
+			createRemoteTask
+			registerPendingTask
+			构造上下文
+			发送ContainerRemoteLaunchEvent
+			发送SpeculatorEvent
+			
+	处理ContainerRemoteLaunchEvent事件					//猜测是远程启动contaienr，当然也可能是本地
+		交给ContainerLauncherRouter处理
+		ContainerLauncherRouter.handle
+			ContainerLauncherImpl.handle
+				将事件放到eventQueue队列中待ContainerLauncherImpl.serviceStart中处理。以下是serviceStart得到处理后的结果					
+					allNodes.add(event.getContainerMgrAddress());
+					...			//检查工作
+					launcherPool.execute(createEventProcessor(event))
+						会执行EventProcessor.run
+							进入CONTAINER_REMOTE_LAUNCH分支
+							c.launch(launchEvent)
+								构造startRequest，然后修改为StartContainersRequest格式
+								startContainers						//ContainerManagementProtocol协议调用，rpc远程调用实现container的启动。
+								根据startContainers返回的reponse构造portInfo，然后得到port
+								发送TaskAttemptContainerLaunchedEvent事件，发送的参数是taskAttemptID和port
+
+	处理TaskAttemptContainerLaunchedEvent事件
+		TaskAttemptStateInternal.ASSIGNED==(TaskAttemptEventType.TA_CONTAINER_LAUNCHED,LaunchedContainerTransition)==>TaskAttemptStateInternal.RUNNING,
+		LaunchedContainerTransition.transition
+			设置taskAttempt启动时间、shuffle端口等...
+			发送SpeculatorEvent事件
+			发送T_ATTEMPT_LAUNCHED类型的TaskTAttemptEvent事件
+
+
+	处理T_ATTEMPT_LAUNCHED类型的TaskTAttemptEvent事件
+	TaskStateInternal.SCHEDULED==(TaskEventType.T_ATTEMPT_LAUNCHED,LaunchTransition)==>TaskStateInternal.RUNNING         
+		LaunchTransition.transition
+			!!!!!here!!!!!
+			
+			
+
+		ContainerAllocatorRouter.serviceStart
+			这里暂时不考虑uber模式
+			构造RMContainerAllocator对象containerAllocator
+			RMContainerAllocator.serviceInit
+				根据配置项mapreduce.job.reduce.slowstart.completedmaps获取reduceSlowStart，默认0.05
+				根据配置项yarn.app.mapreduce.am.job.reduce.rampup.limit获取maxReduceRampupLimit，默认0.5
+				根据配置项yarn.app.mapreduce.am.job.reduce.preemption.limit获取maxReducePreemptionLimit，默认0.5
+				根据配置项mapreduce.job.reducer.preempt.delay.sec获取allocationDelayThresholdMs，默认0，会乘以1000转化为ms
+				根据配置项mapreduce.job.running.map.limit获取maxRunningMaps，默认0
+				根据配置项mapreduce.job.running.reduce.limit获取maxRunningReduces，默认0
+				RackResolver.init
+					获取net.topology.node.switch.mapping.impl的值作为时间类dnsToSwitchMappingClass，默认值为ScriptBasedMapping
+					构造dnsToSwitchMappingClass实例
+					最后构造得到dnsToSwitchMapping
+				根据配置项yarn.app.mapreduce.am.scheduler.connection.wait.interval-ms获取retryInterval，默认360s
+				设置当前时间为retrystartTime
+			RMContainerAllocator.serviceStart
+				循环从eventQueue获取事件,为阻塞调用,当有事件到来,使用handleEvent处理。								//具体的事件处理稍后分析
+
+
+
+
+
 
 附录A 配置的说明
-mapreduce.client.completion.pollinterval				//表示客户端循环判断job是否完成的时间间隔
+mapreduce.client.completion.pollinterval				表示客户端循环判断job是否完成的时间间隔
+mapreduce.job.reduces														设置reduce的数目
+mapreduce.job.reduce.slowstart.completedmaps
+
+默认的OutputFormat为TextOutputFormat
+
+
+FileOutputCommitter
+
