@@ -148,8 +148,9 @@ ContinuousSchedulingThread.run
 									assignContainerPreCheck			//getResourceUsage会计算当前队列下所有子队列的使用的资源。如果总资源使用量超过配置的最大值且有可预留的资源，返回Resources.none，表示无法再该队列的该节点分配资源。
 																							//这里有一步性能的损耗。如果存在节点上有预留资源就不能分配这样的设置，就没有必要每次便利都检查预留资源，应该先检查预留资源，没有预留资源在进行操作?????可修复的patch?????
 									排列下面所有childQueues		 		//FairSharePolicy.FairShareComparator类定义。这里摘一段注释介绍规则:
-																						  //(1)低于minshare的比高于minshare的更可能被调度。(2)同时低于minshare的情况，哪个低于minshare的百分比越大哪个先调度。
-																							//(3)同时高于minshare的按照runningTasks/weight调度.... 待看...
+																						  //(1)低于minshare的比高于minshare的更可能被调度。					//这里的minshare为配置的minshare和请求的最小值。
+																						  //(2)同时低于minshare的情况，哪个低于minshare的百分比越大哪个先调度。
+																							//(3)同时高于minshare的按照runningTasks/weight调度。然后再不行就用开始时间，再不行就按名称调度。
 																							//注意，这里与minshare比较的是demand，demand从何而来待会分析?????
 									便利childQueues继续执行assignContainer				//如果仍然是FSParentQueue继续执行上述操作，否则调用FSLeafQueue
 								FSLeafQueue.assignContainer
@@ -184,14 +185,20 @@ FSParentQueue,FSLeafQueue,FSAppAttempt这三个类都实现了Schedulable接口
 由于进行排序比较的时候需要getMinShare，getDemand，getResourceUsage，getWeights
 (1) FSParentQueue
 	getMinShare				由父类FSQueue实现，是fair-scheduler.xml设置的最小资源量。
-	getDemand					有FSParentQueue.demand字段决定
-
+	getDemand					为所有子队列下的所有app的资源请求的总和，包括运行的和非运行的app
+	getResourceUsage  为所有子队列下的所有app的资源使用量的总和，包括运行的和非运行的app
+	getWeights				配置文件配置的队列weight
 (2) FSLeafQueue			
 	getMinShare				由父类FSQueue实现，是fair-scheduler.xml设置的最小资源量。
-	
+	getDemand					为队列下所有app的资源请求的总和，包括运行的和非运行的app
+	getResourceUsage  为队列下所有app的资源使用量的总和，包括运行的和非运行的app
+	getWeights				配置文件配置的队列weight
 (3) FSAppAttempt
 	getMinShare				为Resources.none()
-	
+	getDemand					app的资源请求的总和
+	getResourceUsage  表示资源消耗量减去被抢占的量。这里没有开启抢占，暂时认为没有使用抢占，这里认为是资源的使用量即可。
+	getWeights				由于没有设置sizeBasedWeight和weightAdjuster，所以这里Priority即为权重
+
 
 UpdateThread线程:									
 	update					//由参数yarn.scheduler.fair.update-interval-ms设置时间间隔，默认是500ms
@@ -203,7 +210,8 @@ UpdateThread线程:
 			FSAppAttempt.updateDemand会遍历各个优先级下的资源请求，然后累加后得到其demand，资源请求来自于FairScheduler.allocate的申请。
 		rootQueue.setFairShare			//设置根队列的fairShare为clusterResource。clusterResource在增加节点，删除节点，更新节点的时候会修改，表示集群的总资源量。
 		rootQueue.recomputeShares
-			这个从根队列开始进行计算fairshare。与updateDemand自下向上累加不同，这个是自上向下分配fair			//详细见"RM调度器分析"			
+			这个从根队列开始进行计算fairshare。与updateDemand自下向上累加不同，这个是自上向下分配fair			//详细见"RM调度器分析"
+			实际得到的fair值就是分配给队列的资源量。会根据配置文件，但不会完全按照配置文件设置。
 		updateRootQueueMetrics
 		记录update调用的时间到metric
 											

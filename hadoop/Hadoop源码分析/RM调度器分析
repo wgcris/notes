@@ -25,6 +25,8 @@ FSParentQueue.recomputeSteadyShares
 					遍历schedulables(即子队列)
 						getFairShareIfFixed						//得到fixedShare
 							该函数实际是计算当前节点(app或队列)是否需要固定的分配资源。如果返回值<0，表示该节点为有weight的，待分配。如果返回0，表示不用给该节点分配资源。如果返回值>0,表示为该节点分配固定的资源量。这里如果maxShare<=0,表示不给该节点分配资资源。如果是分配不是SteadyShare(即share)的时候，且当前的节点不是app而是队列，且当前队列是是非active(没有任何app)的时候，则不用给该队列分配share(这里要知道不是steady share)。如果以上都不满足，切权重为负数，则把当前队列的最小资源作为固定的资源分配该该节点。
+							注:如果传入的weight大于0，稍后再分配。如果传入的weight小于等于0，就分配给它配置文件配置的最小资源量。线上都是有权重的，这里只考虑weight>0的情况。
+							   这个函数值为返回了weight小于等于0的那些固定分配的资源，同时将weight>0可变的资源放入传入的nonFixedSchedulables中。
 						如果得这里把最大资源量大于0，且队列权重也大于0
 							则将该队列加入如到nonFixedSchedulables中。
 						如果队列权重<=0
@@ -36,6 +38,8 @@ FSParentQueue.recomputeSteadyShares
 				然后计算传入的最大资源量totalResource。
 				传入的最大资源量和计算的所有最大资源值取得最小值为该队列下所有子队列所使用的资源最大值totalResource。(这里说明，队列使用超过设置的最大值)
 				注: totalResource这里已经减去了takenResources(即不带权重的队列消耗的资源)
+						这里计算的totalResource是实际能分配的资源量和配置队列的最大值中的最小值。因此，即便使用了集群资源丰富，也不会使用到超过最大值的资源。如果集群资源不丰富，实际分配的fair是配置的最大值小的。
+						实际上如果设置了weight，配置资源的最小值就已经没有意义了，完全可以不用考虑。
 				while(resourceUsedWithWeightToResourceRatio)			//这里第二个参数为schedulables，是由权重的队列
 					这个循环的含义是totalResource(已减去不带权重队列的最小量)的资源按照权限分配给各个带权限队列，直到总量刚好大于totalResource
 	遍历子队列
