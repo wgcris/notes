@@ -200,6 +200,31 @@ FSParentQueue,FSLeafQueue,FSAppAttempt这三个类都实现了Schedulable接口
 	getWeights				由于没有设置sizeBasedWeight和weightAdjuster，所以这里Priority即为权重
 
 
+
+问题: 请求(demand)的时间周期????pending的时候是请求(demand)吗?
+看代码可知，demand为使用量+request
+
+(1) AM申请container的request周期
+AM申请request										//另外，还有一个是为AM申请container的时候的请求。
+ApplicationMasterService.allocate
+	rScheduler.allocate
+		updateResourceRequests
+			appSchedulingInfo.updateResourceRequests
+				这里会将AM发来的请求增加到AppSchedulingInfo.requests中
+				lastRequest
+				... pendingcontainers	...
+
+释放request
+FSAppAttempt.assignContainer
+	当为该app成功分配到container后
+	FSAppAttempt.allocate
+		appSchedulingInfo.allocate
+		增加当前应用的currentConsumption
+		allocateNodeLocal或allocateRackLocal或allocateOffSwitch
+			decResourceRequest							//目前要知道是NM心跳触发的attemptscheduling引发的assignContainer操作会触发分配该应用的资源(前提是分配到该app)，然后释放request
+
+
+
 UpdateThread线程:									
 	update					//由参数yarn.scheduler.fair.update-interval-ms设置时间间隔，默认是500ms
 		updateStarvationStats				//更新饥饿状态，与抢占相关

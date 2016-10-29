@@ -1,7 +1,9 @@
 		一个MapReduce程序的分析
+注: mapreduce新版api, mapred是旧版api
+
 本文以WordCount为例进行分析。
 1. wordcount任务的执行
-(1) hdfs dfs -put a.txt /tmp/in
+(1) hdfs dfs -put a.txt /tmp/in						注:这里txt为653M左右
 (2) hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar wordcount /tmp/in /tmp/out
 2. 源码分析
 2.1 wordcount程序的提交
@@ -9,7 +11,7 @@ WordCount::main
 	GenericOptionsParser					//分析传入参数，这里传入的参数只有两个: /tmp/in /tmp/out	
 	Job.getInstance
 	GenericOptionsParser					//处理传入参数加入到conf中
-	Job.getInstance							//构造一个Job对象
+	Job.getInstance							//构造一个Job对象，继承于JobContextImpl
 		getInstance
 			构造Job对象
 				设置Job的cluster字段为null
@@ -55,7 +57,7 @@ WordCount::main
 									appSubmissionContext获取上下文配置
 								获取applicationId
 								TypeConverter.fromYarn
-									获取集群的时间戳，根据时间戳和appid生成一个JobId对象
+									获取集群的时间戳，根据集群对应的时间戳和appid生成一个JobId对象
 					设置jobid	
 					设置submitJobDir								//最后为	/user/${user}/.staging/${appid}
 					设置配置参数，mapreduce.job.user.name，hadoop.http.filter.initializers，mapreduce.job.dir
@@ -81,11 +83,32 @@ WordCount::main
 						writeNewSplits
 							获取InputFormat对象input,根据JobContextImpl::getInputFormatClass可知默认使用TextInputFormat。
 							input.getSplits		//实际调用FileInputFormat。返回splits，即输入文件对应的切片。
-								设置minSize,maxSize。
-								获取${mapreduce.input.fileinputformat.numinputfiles}下的文件。
-								遍历各个文件
+								设置minSize, 为该格式的最小splitsize和该job配置的最小splitsize两者的最小值。前者为1，后者为线上配置为128M。所以为1。
+								设置maxSize。根据线上测试为128M。
+								listStatus			//遍历输入目录下面的文件，返回文件状态信息到files中
+									getInputPaths
+										根据mapreduce.input.fileinputformat.inputdir得到输入目录。然后根据,隔离出路径列表。这里暂时只考虑一个路径的情况。
+										...token
+										根据配置判断是否需要递归判断。这里没有子目录，暂时考虑不需要的情况。
+										构造filter，增加hiddenFileFilter(过滤掉以"_"和"."开头的文件)
+										然后增加mapreduce.input.pathFilter.class指定的过滤器，这里没有设置。
+										根据前面配置的filter配置inputFilter
+										根据mapreduce.input.fileinputformat.list-status.num-threads获取线程数numThreads
+										singleThreadedListStatus			//返回给result作为listStatus的返回值
+											fs.globStatus					//返回符合filter的所有文件对应的FileStatus
+											遍历list列表(即传入的输入文件或目录列表)
+												假如是目录，就遍历目录，将符合条件的FileStatus放到到result中	
+								遍历listStatus返回的输入目录中文件对应的文件状态对象。
+									获取文件路径path和长度length									
 									获取各个文件对应的块位置blkLocations
-									计算splitsize的大小
+									获取文件块大小，默认为128M
+									计算splitSize=computeSplitSize	//这里计算应该为128M
+									getBlockIndex
+									makeSplit
+									—————————————————????? 熟悉hdfs再看 ?????————————————————
+									
+									
+									
 									根据splitsize构造split，并添加到splits中。
 								设置配置项mapreduce.input.fileinputformat.numinputfiles，为文件数
 							然后重新排序为数组array
@@ -391,6 +414,10 @@ main
 
 
 
+4. JobHistory说明
+使用类: org.apache.hadoop.mapreduce.v2.hs.JobHistoryServer
+
+
 
 附录A 配置的说明
 mapreduce.client.completion.pollinterval				表示客户端循环判断job是否完成的时间间隔
@@ -402,3 +429,70 @@ mapreduce.job.reduce.slowstart.completedmaps
 
 FileOutputCommitter
 
+
+
+
+附录:
+命令:
+(1) hdfs dfs -put a.txt /tmp/in						注:这里txt为653M左右
+(2) hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar wordcount /tmp/in /tmp/out
+
+集群threshold参数默认为1，maxassign为1
+部分命令的打印信息
+[jd_ad@BJYF-Druid-15221 ~]$ hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar wordcount /tmp/in /tmp/out
+Not a valid JAR: /home/jd_ad/share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar
+[jd_ad@BJYF-Druid-15221 ~]$ cd /software/servers/hadoop-2.7.1/
+[jd_ad@BJYF-Druid-15221 hadoop-2.7.1]$ hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar wordcount /tmp/in /tmp/out
+[2016-10-27T17:31:57.847+08:00] [INFO] yarn.client.ConfiguredRMFailoverProxyProvider.performFailover(ConfiguredRMFailoverProxyProvider.java 100) [main] : Failing over to rm2
+[2016-10-27T17:31:58.504+08:00] [INFO] lib.input.FileInputFormat.listStatus(FileInputFormat.java 283) [main] : Total input paths to process : 1
+[2016-10-27T17:31:58.518+08:00] [INFO] compression.lzo.GPLNativeCodeLoader.<clinit>(GPLNativeCodeLoader.java 52) [main] : Loaded native gpl library from the embedded binaries
+[2016-10-27T17:31:58.520+08:00] [INFO] compression.lzo.LzoCodec.<clinit>(LzoCodec.java 76) [main] : Successfully loaded & initialized native-lzo library [hadoop-lzo rev 40b332285be4d4a9ec95a02694b20211810cf4ec]
+[2016-10-27T17:31:58.839+08:00] [INFO] hadoop.mapreduce.JobSubmitter.submitJobInternal(JobSubmitter.java 233) [main] : number of splits:3
+[2016-10-27T17:31:59.081+08:00] [INFO] hadoop.mapreduce.JobSubmitter.printTokens(JobSubmitter.java 322) [main] : Submitting tokens for job: job_1477447398282_0058
+[2016-10-27T17:31:59.441+08:00] [INFO] api.impl.YarnClientImpl.submitApplication(YarnClientImpl.java 273) [main] : Submitted application application_1477447398282_0058
+[2016-10-27T17:31:59.493+08:00] [INFO] hadoop.mapreduce.Job.submit(Job.java 1294) [main] : The url to track the job: http://BJYF-Druid-15216.hadoop.jd.local:50320/proxy/application_1477447398282_0058/
+[2016-10-27T17:31:59.494+08:00] [INFO] hadoop.mapreduce.Job.monitorAndPrintJob(Job.java 1339) [main] : Running job: job_1477447398282_0058
+[2016-10-27T17:32:16.739+08:00] [INFO] hadoop.mapreduce.Job.monitorAndPrintJob(Job.java 1360) [main] : Job job_1477447398282_0058 running in uber mode : false
+[2016-10-27T17:32:16.742+08:00] [INFO] hadoop.mapreduce.Job.monitorAndPrintJob(Job.java 1367) [main] :  map 0% reduce 0%
+
+map的信息
+attempt_1477447398282_0058_m_000000_0	SUCCEEDED	map	/default-rack/BJYF-Druid-15219.hadoop.jd.local:8042	logs	Thu Oct 27 17:32:17 +0800 2016	Thu Oct 27 17:32:52 +0800 2016	34sec	
+attempt_1477447398282_0058_m_000001_0	SUCCEEDED	map	/default-rack/BJYF-Druid-18531.hadoop.jd.local:8042	logs	Thu Oct 27 17:32:17 +0800 2016	Thu Oct 27 17:32:52 +0800 2016	34sec	
+attempt_1477447398282_0058_m_000002_0	SUCCEEDED	map	/default-rack/BJYF-Druid-184126.hadoop.jd.local:8042	logs	Thu Oct 27 17:32:17 +0800 2016	Thu Oct 27 17:32:43 +0800 2016	25sec
+
+reduce的信息
+attempt_1477447398282_0058_r_000000_0	SUCCEEDED	reduce > reduce	/default-rack/BJYF-Druid-184122.hadoop.jd.local:8042	logs	Thu Oct 27 17:32:54 +0800 2016	Thu Oct 27 17:33:07 +0800 2016	Thu Oct 27 17:33:08 +0800 2016	Thu Oct 27 17:33:11 +0800 2016	12sec	1sec	3sec	16sec	
+
+fsck信息
+hdfs fsck /tmp/in/a.txt -files -locations -blocks   
+Connecting to namenode via http://BJYF-Druid-15216.hadoop.jd.local:50070/fsck?ugi=jd_ad&files=1&locations=1&blocks=1&path=%2Ftmp%2Fin%2Fa.txt
+FSCK started by jd_ad (auth:SIMPLE) from /172.19.152.21 for path /tmp/in/a.txt at Thu Oct 27 17:41:25 CST 2016
+/tmp/in/a.txt 684509280 bytes, 6 block(s):  OK
+0. BP-1089191954-172.19.152.15-1474462508760:blk_1073879805_141254 len=134217728 repl=3 [DatanodeInfoWithStorage[172.19.152.19:50010,DS-e12c3e4e-ca10-4633-8c22-f2398fe198f7,DISK], DatanodeInfoWithStorage[172.16.184.120:50010,DS-cb0a8ae4-255c-4bdf-8cf8-3c7066d6dc61,DISK], DatanodeInfoWithStorage[172.16.184.126:50010,DS-5045618b-3107-4ebe-856d-ae1b25710258,DISK]]
+1. BP-1089191954-172.19.152.15-1474462508760:blk_1073879806_141255 len=134217728 repl=3 [DatanodeInfoWithStorage[172.16.185.33:50010,DS-b09bb078-d82a-4c3d-b37a-e09e25f9fbac,DISK], DatanodeInfoWithStorage[172.19.152.20:50010,DS-70c45b7a-0e6c-4390-9368-2423f558eb6a,DISK], DatanodeInfoWithStorage[172.16.185.23:50010,DS-48ee9c8d-8d11-4445-8623-8f3482b34897,DISK]]
+2. BP-1089191954-172.19.152.15-1474462508760:blk_1073879807_141256 len=134217728 repl=3 [DatanodeInfoWithStorage[172.19.152.19:50010,DS-2f6ea0c2-2ff0-4c27-a249-8da8fda15678,DISK], DatanodeInfoWithStorage[172.16.185.31:50010,DS-0b387221-c615-4bd0-92ab-3ab82e2e58cd,DISK], DatanodeInfoWithStorage[172.16.184.122:50010,DS-c6024932-c060-445e-86cf-8fbdd772a08b,DISK]]
+3. BP-1089191954-172.19.152.15-1474462508760:blk_1073879808_141257 len=134217728 repl=3 [DatanodeInfoWithStorage[172.16.184.130:50010,DS-33115c48-e357-409a-bb70-f99cec24d1f4,DISK], DatanodeInfoWithStorage[172.16.185.21:50010,DS-57e8f88f-a98e-4257-badf-791d05d67426,DISK], DatanodeInfoWithStorage[172.16.184.110:50010,DS-b524823d-056a-4fbb-aca5-8afd09efd4c5,DISK]]
+4. BP-1089191954-172.19.152.15-1474462508760:blk_1073879809_141258 len=134217728 repl=3 [DatanodeInfoWithStorage[172.16.184.120:50010,DS-dfa93948-94bd-43b0-998b-53beaf0ce862,DISK], DatanodeInfoWithStorage[172.16.184.110:50010,DS-af3a7f78-e772-455a-8106-a5c57778646e,DISK], DatanodeInfoWithStorage[172.16.184.124:50010,DS-1db86050-d376-4596-b318-7521b2b7fa3d,DISK]]
+5. BP-1089191954-172.19.152.15-1474462508760:blk_1073879810_141259 len=13420640 repl=3 [DatanodeInfoWithStorage[172.16.185.33:50010,DS-7e31ce5f-66e1-49a0-bdd0-a854a459490e,DISK], DatanodeInfoWithStorage[172.16.185.21:50010,DS-5d3d13a8-65ee-4377-9f32-b76ff90ec93a,DISK], DatanodeInfoWithStorage[172.16.185.29:50010,DS-ad4aa826-1a68-4297-9c4d-cd4bff1284e0,DISK]]
+Status: HEALTHY
+ Total size:    684509280 B
+ Total dirs:    0
+ Total files:   1
+ Total symlinks:                0
+ Total blocks (validated):      6 (avg. block size 114084880 B)
+ Minimally replicated blocks:   6 (100.0 %)
+ Over-replicated blocks:        0 (0.0 %)
+ Under-replicated blocks:       0 (0.0 %)
+ Mis-replicated blocks:         0 (0.0 %)
+ Default replication factor:    3
+ Average block replication:     3.0
+ Corrupt blocks:                0
+ Missing replicas:              0 (0.0 %)
+ Number of data-nodes:          28
+ Number of racks:               1
+FSCK ended at Thu Oct 27 17:41:25 CST 2016 in 1 milliseconds
+The filesystem under path '/tmp/in/a.txt' is HEALTHY
+
+
+
+hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar wordcount -Dyarn.app.mapreduce.am.resource.cpu-vcores=10 /tmp/in /tmp/out
