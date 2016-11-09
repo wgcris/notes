@@ -1,25 +1,111 @@
-从启动脚本开始分析
-
-start-dfs.sh
-  "$HADOOP_PREFIX/sbin/hadoop-daemons.sh" \
-    --config "$HADOOP_CONF_DIR" \
-    --hostnames "$NAMENODES" \
-    --script "$bin/hdfs" start namenode $nameStartOpt	
-其中, NAMENODES=$($HADOOP_PREFIX/bin/hdfs getconf -namenodes)
-  调用bin/hdfs，实际是执行了 GetConf类，并传入参数-namenodes
-  NameNodesCommandHandler:doWorkInternal
-    会得到dfs.namenode.servicerpc-address和dfs.namenode.rpc-address的地址(如果没设置会用到fs.defaultFS的值)
-  NAMENODES得到所有NameNode的地址
-...
-
-
-
-
-
-
-
+1 NameNode启动分析
+1.1 启动参数
+启动命令: hadoop-daemon.sh start namenode
+会执行如下命令:
 nohup nice -n $HADOOP_NICENESS $hdfsScript --config $HADOOP_CONF_DIR $command "$@" > "$log" 2>&1 < /dev/null &
+简化后为
+hdfs --config $HADOOP_CONF_DIR namenode
+子hdfs脚本中的实际的运行命令为
+exec /software/servers/jdk1.7.0_67/bin/java -Dproc_namenode -Xmx1000m  -Djava.net.preferIPv4Stack=true -Dhadoop.log.dir=/home/zcy/software/servers/hadoop-2.7.1/logs -Dhadoop.log.file=hadoop.log -Dhadoop.home.dir=/home/zcy/software/servers/hadoop-2.7.1 -Dhadoop.id.str=zcy -Dhadoop.root.logger=INFO,console -Djava.library.path=/home/zcy/software/servers/hadoop-2.7.1/lib/native -Dhadoop.policy.file=hadoop-policy.xml -Djava.net.preferIPv4Stack=true -Djava.net.preferIPv4Stack=true -Djava.net.preferIPv4Stack=true -Dhadoop.log.dir=/home/zcy/software/servers/hadoop-2.7.1/logs -Dhadoop.log.file=hadoop-zcy-namenode-BJYF-Docker-189122.hadoop.jd.local.log -Dhadoop.home.dir=/home/zcy/software/servers/hadoop-2.7.1 -Dhadoop.id.str=zcy -Dhadoop.root.logger=INFO,RFA -Djava.library.path=/home/zcy/software/servers/hadoop-2.7.1/lib/native -Dhadoop.policy.file=hadoop-policy.xml -Djava.net.preferIPv4Stack=true -Dhadoop.security.logger=INFO,RFAS -Dhdfs.audit.logger=INFO,NullAppender -Dhadoop.security.logger=INFO,RFAS -Dhdfs.audit.logger=INFO,NullAppender -Dhadoop.security.logger=INFO,RFAS -Dhdfs.audit.logger=INFO,NullAppender  -Dhadoop.security.logger=INFO,RFAS org.apache.hadoop.hdfs.server.namenode.NameNode
+简化后为
+java org.apache.hadoop.hdfs.server.namenode.NameNode
+因此，正常启动NameNode的情况没有参数
 
-执行
-bin/hdfs --config $HADOOP_CONF_DIR namenode
+1.2 NameNode分析
+NameNode.main
+	parseHelpArgument				//如果输入-h打印帮助信息
+	startupShutdownMessage	//打印确定或关闭信息
+	createNameNode
+		parseArguments				//这里没有设置启动参数，所以返回StartupOption.REGULAR
+		setStartupOption			//更新dfs.namenode.startup配置型
+		进入默认分支，返回NameNode对象
+			NameNode的构造函数
+				this(conf, NamenodeRole.NAMENODE)
+					设置conf， role字段
+					setClientNamenodeAddress
+						根据fs.defaultFS获取默认的nn地址nnAddr,集群一般设置为hdfs://ns1
+						nnUri.getHost()获取nnHost为ns1
+						然后查看dfs.nameservices配置项是否配置了ns1。这里一般会配置的，所以设置clientNamenodeAddress为ns1
+						getNameServiceId			//获取ns的id
+						getNameNodeId					//获取nn的id
+						设置haEnabled，ha模式下为true
+						createHAState					//初始默认应该返回standby状态
+						shouldAllowStandbyReads			//默认不允许standby去读
+						createHAContext				//构造NameNodeHAContext对象
+						initializeGenericKeys
+							配置中增加dfs.nameservice.id或dfs.ha.namenode.id
+							...		//一些配置
+						initialize
+							...			//配置
+							...			//ugi初始化,认证相关
+							...			// metric相关
+							startHttpServer
+							设置spanReceiverHost
+							loadNamesystem				
+								loadFromDisk								//返回给NameNode.namesystem字段
+									checkConfiguration
+										getNamespaceDirs				//获取namespaceDirs，根据dfs.namenode.name.dir配置项。这里配置为/data0/nn
+										getNamespaceEditsDirs		//获取editsDirs，根据dfs.namenode.shared.edits.dir配置。这里配置为qjournal://BJYF-Druid-15218.hadoop.jd.local:8485;BJYF-Druid-15219.hadoop.jd.local:8485;BJYF-Druid-15220.hadoop.jd.local:8485/ns1
+																						//然后在加入dfs.namenode.edits.dir配置的内容，这里没有配置，默认同dfs.namenode.name.dir
+										getRequiredNamespaceEditsDirs		//获取requiredEditsDirs, 根据dfs.namenode.edits.dir.required和dfs.namenode.shared.edits.dir配置。前者没有配置，后者见上面。
+										getSharedEditsDirs			//获取sharedEditsDirs,根据dfs.namenode.shared.edits.dir配置
+										...				//一些检查								
+									构造FSImage对象fsImage
+										构造NNStorage对象storage
+											构造storageDirs，为父类Storage的字段							
+											setStorageDirectories		//会传入fsNameDirs(dfs.namenode.name.dir配置项)，fsEditsDirs(用于JN的edits配置项dfs.namenode.shared.edits.dir和用于NN本地的dfs.namenode.edits.dir配置项)，sharedEditsDirs(用于JN配置项dfs.namenode.shared.edits.dir)
+																							//setStorageDirectories主要构造了fsimage和edits对应的两个目录结构，并增加到storageDirs中
+												遍历dirName，这里仅有一个/data0/nn
+													遍历fsEditsDirs
+														如果fsEditsDirs的子项目中有一个与dirname相同，就移除他，然后isAlsoEdits为true。这里dfs.namenode.edits.dir没有配置，所有确实存在这样的一个目录。
+														设置dirType为NameNodeDirType.IMAGE_AND_EDITS
+														如果是本地目录				//这里配置就是本地目录
+															addStorageDir		//在storageDirs中增加一个StorageDirectory。表示为NN对应的一个存储的类型为NameNodeDirType.IMAGE_AND_EDITS的目录结构。
+												遍历fsEditsDirs
+													addStorageDir			//在storageDirs中增加一个StorageDirectory。表示为NN对应的一个存储的类型为NameNodeDirType.EDITS的目录结构。
+										构造FSEditLog对象给editLog
+											会把一些edit目录以及shareEdits目录放入其中
+										构造NNStorageRetentionManager给archivalManager
+									根据上一步构造的fsImage构造FSNamesystem对象namesystem
+										...		//初始化锁、配置等一些 参数
+										将fsImage设置为FSNamesystem的fsImage字段
+										构造BlockManager对象赋值给blockManager字段					//该类保存并管理hdfs集群中所有数据块的元数据
+										设置datanodeStatistics，blockIdManager，fsOwner，supergroup，isPermissionEnabled,nameserviceId,haEnabled等字段
+										...
+								namesystem.loadFSImage
+									fsImage.recoverTransitionRead
+										...
+										loadFSImage
+											...											//加载image与edits的内容
+									...													//RollingUpgrade相关?????
+									getStartupProgress					//更新nn启动的进度器?????
+									imageLoadComplete						//社会标志位imageLoaded为true表示image加载完成
+									
+							fsn.getFSImage().saveNamespace(fsn);								
+							createRpcServer
+							获取clientNamenodeAddress
+							httpServer.setNameNodeAddress
+							httpServer.setFSImage
+							启动pauseMonitor线程
+							startCommonServices
+						prepareToEnterState
+	namenode.join
+		rpcServer.join
+		clientRpcServer.join
+		serviceRpcServer.join
+
+2 DataNode的启动分析
+2.1 启动参数
+启动命令: hadoop-daemon.sh start namenode
+最后启动命令为:
+nohup nice -n 0 /home/zcy/software/servers/hadoop-2.7.1/bin/hdfs --config /home/zcy/software/servers/hadoop-2.7.1/etc/hadoop/ datanode  > /home/zcy/software/servers/hadoop-2.7.1/logs/hadoop-zcy-datanode-BJYF-Docker-189122.hadoop.jd.local.out 2>&1 < /dev/null &
+可以简化为:
+hdfs --config $HADOOP_CONF_DIR datanode
+脚本的实际启动命令为:
+exec /software/servers/jdk1.7.0_67/bin/java -Dproc_datanode -Xmx1000m  -Djava.net.preferIPv4Stack=true -Dhadoop.log.dir=/home/zcy/software/servers/hadoop-2.7.1/logs -Dhadoop.log.file=hadoop.log -Dhadoop.home.dir=/home/zcy/software/servers/hadoop-2.7.1 -Dhadoop.id.str=zcy -Dhadoop.root.logger=INFO,console -Djava.library.path=/home/zcy/software/servers/hadoop-2.7.1/lib/native -Dhadoop.policy.file=hadoop-policy.xml -Djava.net.preferIPv4Stack=true -Djava.net.preferIPv4Stack=true -Djava.net.preferIPv4Stack=true -Dhadoop.log.dir=/home/zcy/software/servers/hadoop-2.7.1/logs -Dhadoop.log.file=hadoop-zcy-datanode-BJYF-Docker-189122.hadoop.jd.local.log -Dhadoop.home.dir=/home/zcy/software/servers/hadoop-2.7.1 -Dhadoop.id.str=zcy -Dhadoop.root.logger=INFO,RFA -Djava.library.path=/home/zcy/software/servers/hadoop-2.7.1/lib/native -Dhadoop.policy.file=hadoop-policy.xml -Djava.net.preferIPv4Stack=true -server -Dhadoop.security.logger=ERROR,RFAS -Dhadoop.security.logger=ERROR,RFAS -Dhadoop.security.logger=ERROR,RFAS  -Dhadoop.security.logger=INFO,RFAS org.apache.hadoop.hdfs.server.datanode.DataNode
+可以简化为
+java org.apache.hadoop.hdfs.server.datanode.DataNode
+
+2.2 DataNode启动分析
+
 

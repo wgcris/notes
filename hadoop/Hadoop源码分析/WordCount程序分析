@@ -87,13 +87,13 @@ WordCount::main
 								设置maxSize。根据线上测试为128M。
 								listStatus			//遍历输入目录下面的文件，返回文件状态信息到files中
 									getInputPaths
-										根据mapreduce.input.fileinputformat.inputdir得到输入目录。然后根据,隔离出路径列表。这里暂时只考虑一个路径的情况。
+										根据mapreduce.lib.input.FileInputFormat.inputdir得到输入目录。然后根据,隔离出路径列表。这里暂时只考虑一个路径的情况。
 										...token
 										根据配置判断是否需要递归判断。这里没有子目录，暂时考虑不需要的情况。
 										构造filter，增加hiddenFileFilter(过滤掉以"_"和"."开头的文件)
 										然后增加mapreduce.input.pathFilter.class指定的过滤器，这里没有设置。
 										根据前面配置的filter配置inputFilter
-										根据mapreduce.input.fileinputformat.list-status.num-threads获取线程数numThreads
+										根据mapreduce.lib.input.FileInputFormat.list-status.num-threads获取线程数numThreads
 										singleThreadedListStatus			//返回给result作为listStatus的返回值
 											fs.globStatus					//返回符合filter的所有文件对应的FileStatus
 											遍历list列表(即传入的输入文件或目录列表)
@@ -105,12 +105,9 @@ WordCount::main
 									计算splitSize=computeSplitSize	//这里计算应该为128M
 									getBlockIndex
 									makeSplit
-									—————————————————????? 熟悉hdfs再看 ?????————————————————
-									
-									
-									
+									—————————————————????? 熟悉hdfs再看 ?????————————————————									
 									根据splitsize构造split，并添加到splits中。
-								设置配置项mapreduce.input.fileinputformat.numinputfiles，为文件数
+								设置配置项mapreduce.lib.input.FileInputFormat.numinputfiles，为文件数
 							然后重新排序为数组array
 							createSplitFiles				//写一些元数据的信息
 					设置mapreduce.job.maps的值，为writeSplits计算得到的map数目
@@ -198,7 +195,7 @@ main
 				createJob					
 					构造一个Job，类型为JobImpl
 					为dispatcher增加一个JobFinishEvent事件和处理句柄，主要为job完成的处理工作
-				然后为之前的AM发送信号						//这里暂时不分析，稍后分析它的作用?????
+				然后为之前的AM发送信号						//刚开始程序所以amInfos为空，所以这里暂时不分析，稍后分析它的作用?????
 				然后给当前的am发送JobHistoryEvent事件																			//是JH相关事件发起的标志，稍后分析!!!!!
 				发送JobEventType.JOB_INIT事件
 				发送SpeculatorEvent事件
@@ -207,12 +204,11 @@ main
 						构造了一个rpc的server，并启动，这个组件是专MR的AM端专门为client端服务，为client提供查看作业状态，控制作业的接口。
 				如果初始化没有失败，会调用startJobs
 				startJobs
-					发送JobStartEvent事件。
-					
+					发送JobStartEvent事件。			
 					
 3. MR的有限状态机及事件处理
 截止到这里，简单的流程已经分析完成。接下来从发送事件的角度分析。主要是以下三个事件。
-(1) JobHistoryEvent事件
+(1) JobHistoryEvent事件							//根据appMaster.init的注册可以知道JobHistoryEvent事件会交给JobHistoryEventHandler处理。
 (2) JOB_INIT事件
 (3) JobStartEvent事件
 
@@ -277,7 +273,7 @@ main
 		JobStateInternal.SETUP==(JobEventType.JOB_SETUP_COMPLETED,SetupCompletedTransition)==>JobStateInternal.RUNNING,
     SetupCompletedTransition.transition
     	设置job.setupProgress为1
-    	job.scheduleTasks(job.mapTasks, job.numReduceTasks == 0)				//对于wordcount，第二个参数必然为false
+    	job.scheduleTasks(job.mapTasks, job.numReduceTasks == 0)				//对于wordcount，第二个参数必然为false。 这里的mapTask和reduceTask构造于InitTransition中。
     		加入有已经完成的task，会发送TaskRecoverEvent				//这里暂时不考虑recovery模式，暂不分析
 				如果不是已完成的task，会发送TaskEvent，类型为TaskEventType.T_SCHEDULE
 			job.scheduleTasks(job.reduceTasks, true)
@@ -296,7 +292,7 @@ main
         				createAttempt						//构造TaskAttemptImpl对象
         				增加TaskAttemptImpl到attempts中
 							将新的Attempt增加到inProgressAttempts
-							加入有失败的就发送类型为TaskAttemptEventType.TA_RESCHEDULE的TaskAttemptEvent事件，这里暂时不考虑有失败的情况
+							加入有失败的就发送类型为TaskAttemptEventType.TA_RESCHEDULE的TaskAttemptEvent事件
 							没有失败的发送类型为TaskAttemptEventType.TA_SCHEDULE的TaskAttemptEvent事件
 						更新scheduledTime
 						sendTaskStartedEvent
@@ -306,8 +302,11 @@ main
 		这里对于TaskAttemptImpl的初始状态为TaskAttemptStateInternal.NEW				
 			TaskAttemptStateInternal.NEW==(TaskAttemptEventType.TA_SCHEDULE,RequestContainerTransition(false))==>TaskAttemptStateInternal.UNASSIGNED,
        	RequestContainerTransition.transition
-					发送SpeculatorEvent事件
+					发送SpeculatorEvent事件,通知该attempt正在请求一个container
 					这里传入的rescheduled为false，所以发送ContainerRequestEvent事件，类型为ContainerAllocator.EventType.CONTAINER_REQ
+					//注: ContainerRequestEvent传入的四个参数，第一个是attemptid。第二个是申请的资源(根据配置设置)。
+					//第三个参数为节点信息，在TaskAttemptImpl的构造函数中调用resolveHosts分析得到要分配的地址，地址列表来自于createSplits通过构造MapTaskImpl传入。值得注意的是这里传入的是一个数组，是一组地址。
+					//第四个参数为机架信息，为第三个参数解析成为机架信息的
 					
 	处理ContainerAllocator.EventType.CONTAINER_REQ类型的ContainerRequestEvent事件
 		最终会交给MRAppMaster的组件containerAllocator执行
@@ -315,52 +314,98 @@ main
 				containerAllocator.handle							//containerAllocator的类型为RMContainerAllocator
 					将事件写入eventQueue队列待serviceStart中循环读取事件，通过handleEvent处理
 					handleEvent
-						这里仅需要分析CONTAINER_REQ分支
+						这里仅需要分析为CONTAINER_REQ的if分支
 						getMaxContainerCapability							//获取资源最大值，RMContainerAllocator就是一个RMContainerRequestor的子类,调用父类RMCommunicator.getMaxContainerCapability。是与RM通信调用的registerApplicationMaster得到的资源信息(可参见SimpleAppMaster.java)
-						如果是map的话，会做一些检查工作，具体暂不分析
-						设置memory和cpu核心数
-						scheduledRequests.addMap
-							这里遍历了host和rack，稍后详细分析这两个参数的来源后再深入?????
-							构造ContainerRequest，放入map中
-							addContainerReq								//很明显对应于SimpleAppMaster.java的申请资源的过程
-								addResourceRequest					
-									构造remoteRequest
-									addResourceRequestToAsk		//RMContainerRequestor的ask字段是怎么回事
+						如果是map的话
+							检查之前是否有设置mapResourceRequest请求，没设置的话就设置一下。				//这里mapResourceRequest是一个引用，为map申请资源的模板，说明一个job请求的每个job都应该是相同的。同reduce
+							将传入的事件reqEvent设置memory和cpu核心数
+							scheduledRequests.addMap						//这里将设置的reqEvent传入。为scheduledRequests增加一个map的请求
+								假如失败过
+									将这个attempid加入到earlierFailedMaps，用比较高的优先级构造这个map的请求
+								假如第一次
+									这里遍历了host(即这个块的所有副本地址)，将host与taskattemptid的对应关系放到mapsHostMapping中
+									这里遍历了rack(即这个块的所有副本地址对应的机架信息)，将host与taskattemptid的对应关系放到mapsRackMapping中
+									构造ContainerRequest，放入map中
+									addContainerReq								//很明显对应于SimpleAppMaster.java的申请资源的过程。这里调用RMContainerRequestor.addContainerReq,RMContainerRequestor是RMContainerAllocator的父类
+										addResourceRequest					//值得注意的是，这里增加了三种类别的资源请求。首先会遍历所有host构造请求，然后遍历所有rack构造请求，最后构造一个off-switch级别的请求。一个map的请求的次数为文件副本数+文件副本对应的rack数目+1(off-switch)
+											构造remoteRequest加入到remoteRequestsTable字段中。remoteRequestsTable的结构为<优先级<资源名称(节点地址或机架地址或*)<资源(优先级，名称，大小等)，请求>>>
+											addResourceRequestToAsk
+												将remoteRequest(即remoteRequestsTable的最后一级的value)加入到ask字段中											//这里处理map(reduce之后也是这样处理)的请求，会将请求构造给ask字段
+						如果是reduce的话
+								......
+						
 	截止到这里，TaskAttempt向ContainerAllocator发送请求，ContainerAllocator然后先RM申请资源，然后等待，通过心跳查看是否分配到资源。
-									
-
+																											
 	RMCommunicator.startAllocatorThread会启动心跳服务heartbeat，子类RMContainerAllocator中实现了heartbeat。从这里开始分析:
-		getResources					//获取被分配资源的container，稍后需要详细分析?????
-		scheduledRequests.assign		
+		getResources							//返回allocated的container
+			applyConcurrentTaskLimits									//配置限制?????
+			获取headRoom
+			makeRemoteRequest					//会返回response
+				applyRequestLimits											//?????
+				构造blacklistRequest
+				构造allocateRequest
+				scheduler.allocate(allocateRequest)			//rpc调用ApplicationMasterService.allocate					//详细看后面的分析
+				得到上一次心跳的id，可用资源，集群可用NM的数目，完成的container等信息
+				然后清空ask, release, blacklistAdditions, blacklistRemovals列表
+			重新获取headroom
+			response.getAllocatedContainers						//从返回的response中获取allocatedcontainer
+			response.getCompletedContainersStatuses		//从返回的response中获取完成的container的状态
+			computeIgnoreBlacklisting
+			handleUpdatedNodes
+			遍历finishedContainers
+				根据containerid获取从assignedRequests获取对应的taskattemptid
+				将pendingRelease和assignedRequests将对应这个taskattempt的数据结构移除
+				向taskattempt发送createContainerFinishedEvent事件
+				发送TaskAttemptDiagnosticsUpdateEvent事件
+			最后返回分配的container
+		scheduledRequests.assign
+			更新containersAllocated
+			遍历从RM返回的已经为该app分配的allocatedContainers
+				获取分配给该app的container的优先级和可分配的资源量
+				如果是map的话，会根据可分配的资源和单个map的资源计算可分配的map的数目。如果小于0，表示无法分配。
+				如果是reduc的话，执行与上面类似的工作。
+				如果不能分配该container，则执行释放操作。
+				如果节点在黑名单中，重新构造map或reduce，并添加请求。
+				assignContainers								//之前已经对不满足的条件过滤了，这里执行分配
+					遍历之前过滤过的allocatedContainers
+						assignWithoutLocality					//首先调用该函数分配没有本地性要求的container
+							assignToFailedMap或assignToReduce				//没有本地性要求的container为failedmap何reduce，这里实际主要是将其从map或reduce列表中移除，并返回对应的ContainerRequest结构体
+						containerAssigned
+							decContainerReq
+							发送TaskAttemptContainerAssignedEvent
+							将该请求和对应的attemptid加入到assignedRequests中。
+						然后将该request从allocatedContainers移除
+					assignMapsWithLocality					//这里参数是移除了没有本地性要求的contaienr，因此这里剩下的都是正常的map了
+						遍历allocatedContainers
+							获取分配的container对象allocated的host
+							根据host和mapsHostMapping查找出host对应的attemptid
+							拿出attemptid，执行containerAssigned(具体同前)，然后发送JobCounterUpdateEvent事件，同时从allocatedContainers删除。
+							然后分配rack匹配的操作，具体类似上面的操作。最后匹配off-switch级别的。当然，至于后面步骤的执行，需要看前面allocatedContainers是否已经被完全分配出去。
+				遍历剩余的allocatedContainers以释放
+					containerNotAssigned
+						更新containersReleased，pendingRelease以及release							
 		更新已经完成map和reduce数目等参数
-		scheduleReduces			
-			...									//一些检查工作
-			获取被分配container的地址allocatedHost
-			检查是否在黑名单中
-			assignContainers
-				遍历container
-					assignWithoutLocality
-						调用assignToFailedMap或assignToReduce，从map和reduce中将ContainerRequest拿去
-					containerAssigned						//加入container已经assigned的操作
-						发送TaskAttemptContainerAssignedEvent事件
-						将分配到container和attemptid写入到assignedRequests
-				assignMapsWithLocality
-					根据container找到对应的host，然后对host下所有的TaskAttempt操作。调用containerAssigned标记assinged，发送信号。这个步骤实质上就是在同一台机器启动container。发送JobCounterUpdateEvent事件。
-					匹配同机架的container
-					匹配剩余的																			// 这个过程发生了什么????? container是哪一步与host联系到一块的?????
-			释放不能分配的container
-
+		scheduleReduces					//判断是否需要执行reduce，调度reduce的操作，暂时略
+			... 		//待分析
+			
+						
+根据startAllocatorThread进程的心跳服务heartbeat的分析，可知am的心跳从rm中获取分配的container之后，分给指定的map之后会发送TaskAttemptContainerAssignedEvent事件。所以，这里回到TaskAttemptStateInternal状态机继续分析。
 	处理TaskAttemptContainerAssignedEvent事件
 		前面分析可以知道，containerallocator处理心跳包后分配container的时候，对已经分配的container对会发送TaskAttemptContainerAssignedEvent事件
 		TaskAttemptStateInternal.UNASSIGNED==(TaskAttemptEventType.TA_ASSIGNED,ContainerAssignedTransition)==>TaskAttemptStateInternal.ASSIGNED
 		ContainerAssignedTransition.transition
-			createRemoteTask
-			registerPendingTask
-			构造上下文
+			设置taskAttempt的container字段
+			设置taskAttempt的remoteTask字段，会调用createRemoteTask。对于map是会构造MapTask。
+			设置taskAttempt的jvmID字段
+			registerPendingTask							//做了什么?????有什么用?????
+			computeRackAndLocality					//得到当前attempt的本地性等级			
+			构造launchContext上下文
 			发送ContainerRemoteLaunchEvent
 			发送SpeculatorEvent
-			
-	处理ContainerRemoteLaunchEvent事件					//猜测是远程启动contaienr，当然也可能是本地
+
+MRAppMaster中注册了containerLauncher，这里仅考虑远程启动contaienr，即考虑类ContainerLauncherImpl而不是LocalContainerLauncher。
+因此，处理ContainerRemoteLaunchEvent事件交给MRAppMaster.containerLauncher处理，具体实现是ContainerLauncherImpl.handle处理
+	处理ContainerRemoteLaunchEvent事件					
 		交给ContainerLauncherRouter处理
 		ContainerLauncherRouter.handle
 			ContainerLauncherImpl.handle
@@ -372,25 +417,173 @@ main
 							进入CONTAINER_REMOTE_LAUNCH分支
 							c.launch(launchEvent)
 								构造startRequest，然后修改为StartContainersRequest格式
-								startContainers						//ContainerManagementProtocol协议调用，rpc远程调用实现container的启动。
+								startContainers						//ContainerManagementProtocol协议调用，rpc远程调用实现container的启动。			具体的条用过程，详见"yarn应用程序的启动"
 								根据startContainers返回的reponse构造portInfo，然后得到port
 								发送TaskAttemptContainerLaunchedEvent事件，发送的参数是taskAttemptID和port
 
 	处理TaskAttemptContainerLaunchedEvent事件
 		TaskAttemptStateInternal.ASSIGNED==(TaskAttemptEventType.TA_CONTAINER_LAUNCHED,LaunchedContainerTransition)==>TaskAttemptStateInternal.RUNNING,
 		LaunchedContainerTransition.transition
-			设置taskAttempt启动时间、shuffle端口等...
+			设置taskAttempt启动时间, shuffle端口, trackerName, httpPort等...
+			taskAttemptListener.registerLaunchedTask					//会将当前app的信息注册到MRAppMaster.taskAttemptListener, 其中taskAttemptListener是TaskAttemptListenerImpl，完成了TaskUmbilicalProtocol和TaskAttemptListener接口。其中TaskUmbilicalProtocol为map和reduce对应的Container想appmaster注册的协议。
+			sendLaunchedEvents
+				发送JobCounterUpdateEvent事件
+				发送参数为TaskAttemptStartedEvent的JobHistoryEvent事件
 			发送SpeculatorEvent事件
 			发送T_ATTEMPT_LAUNCHED类型的TaskTAttemptEvent事件
-
+			
 
 	处理T_ATTEMPT_LAUNCHED类型的TaskTAttemptEvent事件
 	TaskStateInternal.SCHEDULED==(TaskEventType.T_ATTEMPT_LAUNCHED,LaunchTransition)==>TaskStateInternal.RUNNING         
 		LaunchTransition.transition
-			!!!!!here!!!!!
+			更新metrics等工作
 			
+/*-----------------以下为远程节点执行的map和reduce任务的情况-----------------*/			
+关于具体如何通过startContainers启动一个map的具体参见"yarn应用程序的启动"，这里从启动map的脚本分析一下。
+map启动脚本如下:
+exec /bin/bash -c "$JAVA_HOME/bin/java -Djava.net.preferIPv4Stack=true -Dhadoop.metrics.log.level=WARN  -Xmx1536M -Djava.io.tmpdir=$PWD/tmp -Dlog4j.configuration=container-log4j.properties -Dyarn.app.container.log.dir=/data0/yarn/logs/application_1478505603866_0002/container_1478505603866_0002_01_000002 -Dyarn.app.container.log.filesize=0 -Dhadoop.root.logger=INFO,CLA -Dhadoop.root.logfile=syslog org.apache.hadoop.mapred.YarnChild 172.16.177.127 40206 attempt_1478505603866_0002_m_000000_0 2 1>/data0/yarn/logs/application_1478505603866_0002/container_1478505603866_0002_01_000002/stdout 2>/data0/yarn/logs/application_1478505603866_0002/container_1478505603866_0002_01_000002/stderr "
+相当于执行如下命令:
+java org.apache.hadoop.mapred.YarnChild 172.16.177.127 40206 attempt_1478505603866_0002_m_000000_0 2
+reduce启动脚本如下:
+exec /bin/bash -c "$JAVA_HOME/bin/java -Djava.net.preferIPv4Stack=true -Dhadoop.metrics.log.level=WARN  -Xmx3072M -Djava.io.tmpdir=$PWD/tmp -Dlog4j.configuration=container-log4j.properties -Dyarn.app.container.log.dir=/data0/yarn/logs/application_1478505603866_0003/container_1478505603866_0003_01_000004 -Dyarn.app.container.log.filesize=0 -Dhadoop.root.logger=INFO,CLA -Dhadoop.root.logfile=syslog -Dyarn.app.mapreduce.shuffle.logger=INFO,shuffleCLA -Dyarn.app.mapreduce.shuffle.logfile=syslog.shuffle -Dyarn.app.mapreduce.shuffle.log.filesize=0 -Dyarn.app.mapreduce.shuffle.log.backups=0 org.apache.hadoop.mapred.YarnChild 172.16.177.127 46698 attempt_1478505603866_0003_r_000000_0 4 1>/data0/yarn/logs/application_1478505603866_0003/container_1478505603866_0003_01_000004/stdout 2>/data0/yarn/logs/application_1478505603866_0003/container_1478505603866_0003_01_000004/stderr "
+相当于执行如下命令:
+java org.apache.hadoop.mapred.YarnChild 172.16.177.127 46698 attempt_1478505603866_0003_r_000000_0 4 
 			
+map任务的分析
+YarnChild.main
+	一次获取传入参数，依次为host,port,attemptid,appid
+	构造jvmid，会根据attempt构造，另外值得注意的是这里根据attemptid的名字来判断该taks是map还是reduce
+	... metric,安全相关
+	构造TaskUmbilicalProtocol对象umbilical，为了与appmaster通信
+	umbilical.getTask							//这里使用rpc远程调用TaskAttemptListenerImpl.getTask
+		TaskAttemptListenerImpl.getTask会根据传入的jvmid来返回jvmtask,并跟新相应的列表
+	根据上一步返回的jvmtask获取实际的task
+	更新YarnChild的taskid
+	configureTask
+	taskFinal.run								//这里必然是MapTask.run
+		MapTask.run
+			配置进度条的信息
+			初始化reporter
+			initialize							//初始化配置信息
+			这里好像没有setup阶段，暂时不考虑cleanup阶段
+			runNewMapper
+				根据mr程序配置的一系列类构造一系列对象
+				...										//一些map具体的执行操作。暂时不分析。
+			done
+				...
+				假如需要提交最终结果，会执行umbilical.commitPending，远程调用TaskAttemptListenerImpl.commitPending, 即发送TaskAttemptEvent(attemptID,TaskAttemptEventType.TA_COMMIT_PENDING)事件
+				...
+				sendDone
+					umbilical.done		远程调用TaskAttemptListenerImpl.done, 即发送TaskAttemptEvent(attemptID, TaskAttemptEventType.TA_DONE))
+reduce任务的分析
+YarnChild.main
+	//具体流程同map任务
+	ReduceTask.run
+		配置reduce三个阶段的进度，分别为copy，sort，reduce
+		初始化reporter
+		...												//一些reduce具体的执行操作。暂时不分析。
 
+/*-----------------以上为远程节点执行的map任务的情况-----------------*/			
+		
+	思考的问题是，这里TaskTAttempt处理RUNNING状态，具体的map的任务必须知道真正执行在remote节点的map任务的执行进度，带着这个问题分析。
+		实际上对于Map,会使用父类方法Task.statusUpdate通过TaskUmbilicalProtocol协议给appmaster发送更新进度信息，具体略。
+		
+这里接下来分析TaskAttempt的状态机，按照需要提交结果的流程分析，即存在COMMIT_PENDING状态的流程。
+			
+	
+TaskAttemptStateInternal.RUNNING==(TaskAttemptEventType.TA_COMMIT_PENDING,CommitPendingTransition)==>TaskAttemptStateInternal.COMMIT_PENDING,
+	CommitPendingTransition.transition
+		发送类型为TaskEventType.T_ATTEMPT_COMMIT_PENDING的TaskTAttemptEvent事件。	这时候会从TaskAttempt的状态机处理跳到Task的状态机处理中	
+		
+处理类型为TaskEventType.T_ATTEMPT_COMMIT_PENDING的TaskTAttemptEvent事件
+TaskStateInternal.RUNNING==(TaskEventType.T_ATTEMPT_COMMIT_PENDING,AttemptCommitPendingTransition)==>TaskStateInternal.RUNNING
+	AttemptCommitPendingTransition.transition
+		假如task.commitAttempt为null就设置它。否则表示已经提交过，就发送TaskAttemptKillEvent。	//因此，可以知道该步骤实际是为了告诉task自己这个taskattemp已经完成。
+
+根据MapTask.run的done调用，可以知道还有类型为TaskAttemptEventType.TA_DONE的TaskAttemptEvent信号需要处理
+	TaskAttemptStateInternal.COMMIT_PENDING==(TaskAttemptEventType.TA_DONE, CLEANUP_CONTAINER_TRANSITION)==>TaskAttemptStateInternal.SUCCESS_CONTAINER_CLEANUP,
+  	CLEANUP_CONTAINER_TRANSITION，即CleanupContainerTransition
+  	CleanupContainerTransition.transition
+			taskAttemptListener.unregister							//taskattempt马上结束，不要需要与am通信，所以unregister
+			如果发来的是TaskAttemptKillEvent，则增加诊断信息
+			更新进度表
+			updateProgressSplits					//更新进程信息，counter
+			发送类型为ContainerLauncher.EventType.CONTAINER_REMOTE_CLEANUP的ContainerLauncherEvent事件
+
+
+处理类型为ContainerLauncher.EventType.CONTAINER_REMOTE_CLEANUP的ContainerLauncherEvent事件
+	会由ContainerLauncherImpl.EventProcessor.run进入CONTAINER_REMOTE_CLEANUP分支处理
+	c.kill
+		首先会考虑是否launch或是否完成的情况进行处理。
+		如果没有launch的时候，更新状态。
+		如果没有完成，会rpc远程执行stopContainers关闭container
+		最后发送类型为TaskAttemptEventType.TA_CONTAINER_CLEANED的TaskAttemptEvent事件。这里对所有的情况均发送该事件。
+		
+处理类型为TaskAttemptEventType.TA_CONTAINER_CLEANED的TaskAttemptEvent事件
+	TaskAttemptStateInternal.SUCCESS_CONTAINER_CLEANUP==(TaskAttemptEventType.TA_CONTAINER_CLEANED,SucceededTransition)==>TaskAttemptStateInternal.SUCCEEDED
+	SucceededTransition.transition
+		设置taskAttempt的结束事件
+		处理createJobCounterUpdateEventTASucceeded事件
+		logAttemptFinishedEvent			//处理日志
+		发送类型为TaskEventType.T_ATTEMPT_SUCCEEDED的TaskTAttemptEvent事件
+		发送SpeculatorEvent
+	
+处理类型为TaskEventType.T_ATTEMPT_SUCCEEDED的TaskTAttemptEvent事件
+	这个时候TaskStateInternal处于RUNNING状态
+	TaskStateInternal.RUNNING==(TaskEventType.T_ATTEMPT_SUCCEEDED,AttemptSucceededTransition)==>TaskStateInternal.SUCCEEDED
+		AttemptSucceededTransition.transition
+			handleTaskAttemptCompletion						//发送JobTaskAttemptCompletedEvent        
+			将taskattemptid加入到task.finishedAttempts
+			将taskattemptid从task.inProgressAttempts移除
+			更新successfulAttempt为该taskattemptid						//稍后马上使用，为了记录该task下成功的那个attempid. 个人认为用局部变量更好。
+			sendTaskSucceededEvents
+				发送类型为JobEventType.JOB_TASK_COMPLETED的JobTaskEvent事件，传入一个参数为TaskState.SUCCEEDED
+				发送JobHistoryEvent事件
+			会遍历task下的所有attempt, 如果不是成功的那个successfulAttempt并没有完成，会发送TaskAttemptKillEvent
+				
+处理类型为JobEventType.JOB_TASK_COMPLETED的JobTaskEvent事件
+	当前JobStateInternal状态为RUNNING
+	JobStateInternal.RUNNING==(JobEventType.JOB_TASK_COMPLETED,TaskCompletedTransition)==>JobStateInternal.RUNNING,JobStateInternal.COMMITTING, JobStateInternal.FAIL_WAIT,JobStateInternal.FAIL_ABORT
+  	TaskCompletedTransition.transition
+  		获取对应的Task
+  		taskSucceeded
+  			更新succeededMapTaskCount或succeededMapTaskCount
+  			更新metric
+			checkJobAfterTaskCompletion
+				假如map或reduce达到一定的比例(默认是0，即不能失败)失败的话
+				设置结束时间
+				对所有未结束的任务发送类型为TaskEventType.T_KILL的TaskEvent事件
+				假如之前所有的任务完成的话，发送类型为FAILED的CommitterJobAbortEvent事件。返回JobStateInternal.FAIL_ABORT
+				然后是一步等待任务被杀的设置
+				checkReadyForCommit
+					假如所有任务完成，并且当前状态是RUNNING。发送CommitterJobCommitEvent并返回JobStateInternal.COMMITTING状态。
+
+这里按照一直正确的流程继续分析。因此分析处理CommitterJobCommitEvent事件
+	交给CommitterEventHandler.run的JOB_COMMIT分支处理
+	handleJobCommit
+		touchz						//创建startCommitFile文件，作为开始标志。
+		jobCommitStarted	//设置当前线程为jobCommitThread
+		waitForValidCommitWindow				//保证上次心跳与当前时间不超过10s(默认值)的间隔
+		committer.commitJob							//根据具体的类做一些操作和清理操作
+		touchz						//创建endCommitSuccessFile文件，作为成功标志
+		发送JobCommitCompletedEvent
+		jobCommitEnded
+
+处理JobCommitCompletedEvent事件
+
+JobEventType.JOB_COMMIT_COMPLETED
+	JobStateInternal.COMMITTING==((JobEventType.JOB_COMMIT_COMPLETED,CommitSucceededTransition))==>JobStateInternal.SUCCEEDED
+    CommitSucceededTransition.transition
+    	发送JobFinishedEvent事件
+    	job.finished
+    		更新metrics    
+				
+至此，一个MR程序的正常运行流程分析完成			
+4 组件和一些重要的函数的说明
+4.1 JobHistory说明
+使用类: org.apache.hadoop.mapreduce.v2.hs.JobHistoryServer
+
+4.2 ContainerAllocatorRouter组件说明
 		ContainerAllocatorRouter.serviceStart
 			这里暂时不考虑uber模式
 			构造RMContainerAllocator对象containerAllocator
@@ -410,13 +603,27 @@ main
 			RMContainerAllocator.serviceStart
 				循环从eventQueue获取事件,为阻塞调用,当有事件到来,使用handleEvent处理。								//具体的事件处理稍后分析
 
-
-
-
-
-4. JobHistory说明
-使用类: org.apache.hadoop.mapreduce.v2.hs.JobHistoryServer
-
+4.3 ApplicationMasterService.allocate的说明
+ApplicationMasterService.allocate
+	获取appattemptid和appid
+	为amLivelinessMonitor发ping响应存活信息
+	判断app是否注册
+	判断心跳是否是新的
+	规范化request的progress
+	发送RMAppAttemptStatusupdateEvent
+	获取请求列表ask和释放列表release以及blacklistRequest					//暂不分析blacklistRequest
+	...	nodelabel， 规范化等
+	rScheduler.allocate					//回来领取rm调度器分配的资源，调用FairScheduler.allocate
+		得到对应的应用的结构体
+		updateResourceRequests
+			
+		...				//其他信息
+	构造allocateResponse
+	配置nodereport,AllocatedContainers,CompletedContainersStatuses,AvailableResources,NumClusterNodes等信息
+	
+4.4 RMCommunicator.scheduler
+RMCommunicator.scheduler完成了ApplicationMasterProtocol协议，是AM与RM通信的主要协议。
+实际实现为ApplicationMasterProtocolPBClientImpl类
 
 
 附录A 配置的说明
@@ -432,7 +639,9 @@ FileOutputCommitter
 
 
 
-附录:
+
+
+附录A:
 命令:
 (1) hdfs dfs -put a.txt /tmp/in						注:这里txt为653M左右
 (2) hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar wordcount /tmp/in /tmp/out
@@ -494,5 +703,33 @@ FSCK ended at Thu Oct 27 17:41:25 CST 2016 in 1 milliseconds
 The filesystem under path '/tmp/in/a.txt' is HEALTHY
 
 
-
 hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar wordcount -Dyarn.app.mapreduce.am.resource.cpu-vcores=10 /tmp/in /tmp/out
+
+
+
+
+
+
+附录B: terasort本地化请求信息记录
+生成初始材料:
+hadoop jar /software/servers/hadoop-2.7.1/share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar terasort /tmp/out2 /tmp/sort2
+
+生成文件的hdfs副本信息:
+hdfs fsck /tmp/out2 -locations -blocks -files   
+/tmp/out2/part-m-00000 500000 bytes, 1 block(s):  OK
+0. BP-1388297707-172.16.177.125-1473941304741:blk_1073869409_128649 len=500000 repl=3 [DatanodeInfoWithStorage[172.16.176.49:50010,DS-dffccd77-1b1b-4648-b0a5-a8f0e83cb523,DISK], DatanodeInfoWithStorage[172.16.176.47:50010,DS-6aaf2da2-6450-4328-8fcd-3795af378a4f,DISK], DatanodeInfoWithStorage[172.16.177.127:50010,DS-0c0fec4c-8e5a-496d-b012-55c5f0e36905,DISK]]
+/tmp/out2/part-m-00001 500000 bytes, 1 block(s):  OK
+0. BP-1388297707-172.16.177.125-1473941304741:blk_1073869410_128650 len=500000 repl=3 [DatanodeInfoWithStorage[172.16.176.49:50010,DS-ae4f8cc1-fa03-4a34-a9de-49ca7de99df0,DISK], DatanodeInfoWithStorage[172.16.177.127:50010,DS-183a5bba-0dd7-4485-a138-4c3c42a5027d,DISK], DatanodeInfoWithStorage[172.16.176.47:50010,DS-3cbc3787-64e9-424c-bf25-abc31c666385,DISK]]
+可以看出两个文件都是三个副本(该测试集群只有3个DN和NM节点)
+
+命令:
+hadoop jar /software/servers/hadoop-2.7.1/share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar terasort /tmp/out2 /tmp/sort2
+
+
+
+
+
+
+问题:
+一个map对应的split有3个副本，会对应几个request
+

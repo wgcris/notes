@@ -643,9 +643,6 @@ ContainerLaunch.call
 	finally的保存工作
 	给ContainerManagerImpl发送ContainerEventType.CONTAINER_EXITED_WITH_SUCCESS事件
 			
-
-
-			
 ContainerManagerImpl处理ContainerEventType.CONTAINER_LAUNCHED事件			
 	ContainerEventDispatcher.handle
 		ContainerImpl.handle
