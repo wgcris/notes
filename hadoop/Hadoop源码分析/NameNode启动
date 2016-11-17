@@ -107,5 +107,15 @@ exec /software/servers/jdk1.7.0_67/bin/java -Dproc_datanode -Xmx1000m  -Djava.ne
 java org.apache.hadoop.hdfs.server.datanode.DataNode
 
 2.2 DataNode启动分析
+main
+	secureMain
+		createDataNode
+			instantiateDataNode
+				getStorageLocations
+					获取dfs.datanode.data.dir的值到rawLocations						//线上配置值为/data0/dfs,/data1/dfs,....,/data11/dfs
+					遍历rawLocations
+						StorageLocation.parse
+				makeInstance
+			runDatanodeDaemon
 
 

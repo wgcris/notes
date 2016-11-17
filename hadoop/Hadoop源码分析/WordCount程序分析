@@ -467,7 +467,9 @@ YarnChild.main
 			initialize							//初始化配置信息
 			这里好像没有setup阶段，暂时不考虑cleanup阶段
 			runNewMapper
-				根据mr程序配置的一系列类构造一系列对象
+				构造taskContext对象
+				
+				setMapperClass
 				...										//一些map具体的执行操作。暂时不分析。
 			done
 				...
@@ -509,7 +511,6 @@ TaskStateInternal.RUNNING==(TaskEventType.T_ATTEMPT_COMMIT_PENDING,AttemptCommit
 			更新进度表
 			updateProgressSplits					//更新进程信息，counter
 			发送类型为ContainerLauncher.EventType.CONTAINER_REMOTE_CLEANUP的ContainerLauncherEvent事件
-
 
 处理类型为ContainerLauncher.EventType.CONTAINER_REMOTE_CLEANUP的ContainerLauncherEvent事件
 	会由ContainerLauncherImpl.EventProcessor.run进入CONTAINER_REMOTE_CLEANUP分支处理
@@ -732,4 +733,6 @@ hadoop jar /software/servers/hadoop-2.7.1/share/hadoop/mapreduce/hadoop-mapreduc
 
 问题:
 一个map对应的split有3个副本，会对应几个request
+
+
 

@@ -1,0 +1,73 @@
+Balancer的说明
+从Balancer.Cli.run开始分析，前面略。
+Balancer.Cli.run
+	checkReplicationPolicyCompatibility			//检查兼容性
+	DFSUtil.getNsServiceRpcUris
+		getNameServiceUris										//第二个参数为"dfs.namenode.servicerpc-address"
+																					//线上配置为dfs.namenode.servicerpc-address.ns1.nn1的值为$ip1:8021
+																					//线上配置为dfs.namenode.servicerpc-address.ns1.nn2的值为$ip2:8021
+																					//第三参数是dfs.namenode.rpc-address。配置类似于第二个参数，只是端口为8020
+			这里返回得到的hdfs://ns1。 因为识别的参数为dfs.namenode.servicerpc-address，而ha模式实际配置的参数形如dfs.namenode.servicerpc-address.ns1.nn1。所以这里仅仅返回hdfs://ns1
+		Balancer.run
+			构造NameNodeConnector对象列表connectors
+			遍历每一个connectors
+				构造Balancer				//每一个NameNodeConnector对象构造一个
+				runOneIteration
+					dispatcher.init										//这里的dispatcher为Balancer的字段，Balancer与connectors一一对应
+						getLiveDatanodeStorageReport		//获取这个ns下所有的live的dn状态
+						遍历这些状态，将其加入到trimmed，并且将对应的DatanodeInfo信息加入到cluster
+					init							//返回bytesLeftToMove，表示最大可移动
+						policy.accumulateSpaces					//将所有节点的存储能力和使用信息加入到policy
+						policy.initAvgUtilization				//计算平均利用率
+						遍历节点reports
+							根据当前节点的report构造DDatanode对象
+							getMovableTypes返回RAMDISK，SSD，DISK，ARCHIVE，并遍历。这里假设只有DISK类型。
+							getUtilization			//获取disk类型的使用率。注:这里为当前节点的使用率
+							getCapacity					//获取disk类型的容量。注:这里为当前节点的容量
+							utilizationDiff			//计算得到当前节点使用率与其他节点的差值
+							thresholdDiff				//计算diff与阀值的差
+							computeMaxSize2Move	//计算应该移动的最大size
+							假如utilizationDiff>0
+								dn.addSource
+								如果超出量没有达到阈值加入到aboveAvgUtilized。超过阈值会加到overUtilized
+							假如utilizationDiff<=0
+								dn.addTarget
+								如果超出量没有达到阈值加入到belowAvgUtilized。超过阈值会加到underUtilized
+							加入到dispatcher.sstorageGroupMap中
+					chooseStorageGroups
+						chooseStorageGroups(Matcher.SAME_RACK)
+							chooseStorageGroups(overUtilized, underUtilized, Matcher.SAME_RACK)					//
+								遍历overUtilized列表
+									choose4One
+										chooseCandidate				//遍历候选(这里为underUtilized)找到一个第一个有存储空间且同机架的节点
+										这里overUtilized为Source		//从overUtilized端移动到underUtilized端
+										matchSourceWithTargetToMove
+											构造一个Task
+											addTask
+											incScheduledSize
+											dispatcher.add
+												加入到sources和targets列表中
+										假如没有可用空间就从候选列表中移除
+							...
+							...				//在另两个级别遍历
+						chooseStorageGroups(Matcher.ANY_OTHER)						//类似于之前的
+					dispatchAndCheckContinue
+						dispatchBlockMoves
+							提交一些线程，使用ExecutorService的方式，并等待完成。执行dispatchBlocks操作
+							dispatchBlocks
+							waitForMoveCompletion
+							
+						
+cd /sys/fs/cgroup/cpu/hadoop-yarn;
+line=$(ls -l | grep ^d | grep -v  container_1479050512467 | wc -l);
+time1=`date +%s.%N`;
+ls -l|grep ^d|grep -v  container_1479050512467 |  awk '{print $9}' | xargs  rmdir;
+time2=`date +%s.%N`;
+echo $(echo $(echo $(echo $time2-$time1|bc)*1000000 |bc)/$line | bc)
+
+
+$SPARK_HOME/bin/spark-submit --class org.apache.spark.examples.SparkPi --jars $SPARK_HOME/lib/spark-examples-1.5.3-SNAPSHOT-hadoop2.7.1.jar --master yarn-cluster --queue root.bdp_jdw  --conf spark.yarn.appMasterEnv.yarn.nodemanager.container-executor.class=org.apache.hadoop.yarn.server.nodemanager.DockerContainerExecutor --conf spark.executorEnv.yarn.nodemanager.container-executor.class=org.apache.hadoop.yarn.server.nodemanager.DockerContainerExecutor --conf spark.yarn.appMasterEnv.yarn.nodemanager.docker-container-executor.image-name=bdp-docker.jd.com:5000/bdp-docker.jd.com:5000/hecate_tbi_dmp:latest --conf spark.executorEnv.yarn.nodemanager.docker-container-executor.image-name=bdp-docker.jd.com:5000/hecate_tbi_dmp:latest --executor-memory 20G --num-executors 3 hdfs://ns1/tmp/sparktest 1000
+
+
+tail -n 900000 hadoop-hadp-namenode-BJYF-Druid-17239.hadoop.jd.local.log > /root/tmp-1
+
