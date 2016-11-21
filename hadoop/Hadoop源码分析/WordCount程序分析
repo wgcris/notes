@@ -729,8 +729,6 @@ hadoop jar /software/servers/hadoop-2.7.1/share/hadoop/mapreduce/hadoop-mapreduc
 
 
 
-
-
 问题:
 一个map对应的split有3个副本，会对应几个request
 

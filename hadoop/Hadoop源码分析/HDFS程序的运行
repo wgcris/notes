@@ -2,8 +2,10 @@
 hdfs dfs -ls /test
 根据脚本选择"dfs"会调用类org.apache.hadoop.fs.FsShell，参数为"dfs" "-ls" "/test"
 FsShell.main
-	构造FsShell对象,给Configuration对象
-	关闭安静模式
+	构造FsShell对象
+	构造Configuration对象
+	关闭安静模式，即设置Configuration对象的quietmode字段为false
+	
 	ToolRunner.run
 		ToolRunner.run
 			GenericOptionsParser

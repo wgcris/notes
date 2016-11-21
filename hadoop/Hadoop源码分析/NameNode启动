@@ -111,11 +111,24 @@ main
 	secureMain
 		createDataNode
 			instantiateDataNode
-				getStorageLocations
+				getStorageLocations					//遍历返回StorageLocation列表，即/data0/dfs,/data1/dfs,....,/data11/dfs对应的一组StorageLocation对象
 					获取dfs.datanode.data.dir的值到rawLocations						//线上配置值为/data0/dfs,/data1/dfs,....,/data11/dfs
 					遍历rawLocations
 						StorageLocation.parse
 				makeInstance
+					构造对象
+					根据配置项dfs.datanode.data.dir.perm(默认700)构造权限对象700
+					构造DataNodeDiskChecker对象
+					checkStorageLocations
+						一次检查dfs.datanode.data.dir配置目录的全新，并将合法的目录通过locations返回
+					构造DataNode							//传入的参数为conf,locations(合法目录),resources(这里为null)
 			runDatanodeDaemon
+				blockPoolManager.startAll
+					开启offerServices中的所有服务。		//为一组与NN通信的服务，实现类为BPOfferService
+				dataXceiverServer.start
+					会调用DataXceiverServer.run方法
+				localDataXceiverServer.start
+				ipcServer.start
+				startPlugins
 
 
