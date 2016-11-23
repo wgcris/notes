@@ -5,7 +5,7 @@ FsShell.main
 	构造FsShell对象
 	构造Configuration对象
 	关闭安静模式，即设置Configuration对象的quietmode字段为false
-	
+	为FsShell对象
 	ToolRunner.run
 		ToolRunner.run
 			GenericOptionsParser
@@ -21,7 +21,7 @@ FsShell.main
 					Command.run				//传入参数为"/test"
 						Ls.processOptions			//这里没有设置ls的选项。加上-d表示查询目录，-R递归查询，-h可以将文件大小方便阅读的格式。
 						Command.processRawArguments
-							Command.processArguments				//这里的传入参数是expandArguments(args)，expandArguments留作稍后分析
+							Command.processArguments				//这里的传入参数是expandArguments(args)，该函数将参数列表转化为list
 								遍历参数列表("这里为"/test"转化的PathData)，调用Ls.processArgument
 									Ls.processPathArgument
 										//这里暂时不考虑递归
