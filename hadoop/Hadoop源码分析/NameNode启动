@@ -82,7 +82,7 @@ NameNode.main
 									imageLoadComplete						//社会标志位imageLoaded为true表示image加载完成
 									
 							fsn.getFSImage().saveNamespace(fsn);								
-							createRpcServer
+							createRpcServer									//构造NameNodeRpcServer对象，完成了NamenodeProtocols协议，包括一系列协议
 							获取clientNamenodeAddress
 							httpServer.setNameNodeAddress
 							httpServer.setFSImage

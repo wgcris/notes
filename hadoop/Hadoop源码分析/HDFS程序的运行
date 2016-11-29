@@ -1,3 +1,4 @@
+1 hdfs dfs -ls /test
 调试方法: export HADOOP_ROOT_LOGGER=DEBUG,console
 hdfs dfs -ls /test
 根据脚本选择"dfs"会调用类org.apache.hadoop.fs.FsShell，参数为"dfs" "-ls" "/test"
@@ -21,7 +22,7 @@ FsShell.main
 					Command.run				//传入参数为"/test"
 						Ls.processOptions			//这里没有设置ls的选项。加上-d表示查询目录，-R递归查询，-h可以将文件大小方便阅读的格式。
 						Command.processRawArguments
-							Command.processArguments				//这里的传入参数是expandArguments(args)，该函数将参数列表转化为list
+							Command.processArguments				//这里的传入参数是expandArguments(args)，该函数将参数列表转化为PathData类型的list
 								遍历参数列表("这里为"/test"转化的PathData)，调用Ls.processArgument
 									Ls.processPathArgument
 										//这里暂时不考虑递归
@@ -29,7 +30,7 @@ FsShell.main
 											Ls.processPaths
 												打印查找到几个项目
 												调整列的宽度。
-												Command.processPaths
+												LS.processPaths
 													遍历PathData
 													Ls.processPath				//打印到查询的一列数据
 													暂时不考虑递归查找recursePath
@@ -38,16 +39,97 @@ FsShell.main
 Command.expandArguments					// 参数传入为"/test"
 	主要是遍历字符串列表，然后expandArgument构造PathData结构体，重新组成PathData列表
 	expandArgument
-		PathData.expandAsGlob
+		PathData.expandAsGlob				//这里第一个参数是/test
+			构造Path对象globPath			//这里没有schema和authority, 因此该Path对象的uri暂时没有schema和authority。			如果传入参数是hdfs://ns1/test/ 。会依次解析scheme, authority, path
+			getFileSystem						//构造FileSystem对象fs，具体为DistributedFileSystem对象
+				FileSystem.get
+					如果scheme和authority均为null，使用配置的默认文件系统(hdfs://ns1/)重新调用FileSystem.get
+					如果缓冲中没有默认的对象，就调用createFileSystem调用。会使用ServiceLoader最后构造DistributedFileSystem对象						//注: 这里没有完全按照代码说明。					
 			根据传入的"/test"和conf构造Path对象globPath和DFs文件系统对象fs
 			fs.globStatus							//获取状态
-				...
-			...
-			
+				Globber.glob
+					得到schema和authority以及pathPatternString
+					GlobExpander.expand		//获取flattenedPatterns,猜测是根据pathPatternString解析得到的实际的文件列表
+					遍历pathPatternString
+						fixRelativePart			// 修复相对路径
+						getPathComponents		// 将路径分开为列表			/a/*/c would be broken into the list [a, *, c]
+						构造候选ArrayList对象candidates
+						构造一个FileStatus对象rootPlaceholder，它表示根目录
+						将rootPlaceholder设置为候选
+						遍历路径的components
+							会检查匹配，然后将component加到candidate中
+							遍历candidates					//这里不按照代码说明。实质就是按照根目录开始一层一层的使用listStatus找子目录，然后递归到最后得到FileStatus对象。这里需要关注一下listStatus的实现。
+								listStatus
+									DistributedFileSystem.listStatus
+										FileSystemLinkResolver.resolve			//这里相当于执行doCall
+											FileSystemLinkResolver.doCall
+												listStatusInternal
+													dfs.listPaths									//dfs是DFSClient对象
+														namenode.getListing
+														会远程调用NameNodeRpcServer.getListing
+			对返回的stats根据其类型进行处理。如果是HAS_SCHEME移除authority。如果是SCHEMELESS_ABSOLUTE，直接匹配路径。如果是RELATIVE，修改为绝对路径。
+			最后排序之后返回items。是一个匹配指定文件的PathData数组。
 
-														
+NN端的分析，从NameNodeRpcServer.getListing开始，该方法是完成了ClientProtocol协议，是客户端访问NN协议。								#这里还有个问题就是具体连接哪个ns
+NameNodeRpcServer.getListing
+	namesystem.getListing					//namesystem为loadNamesystem函数构造的FSNamesystem对象
+		FSDirStatAndListingOp.getListingInt		
+			...									//待看
+
+2 hdfs dfs -get /tmp/a
+简化前面的分析，可以从FsShell.run开始分析
+	FsShell.run					//参数为"-get" "/tmp/a"
+		构造一个Command对象instance，实际是org.apache.hadoop.fs.shell.Get类			//注: Get => CommandWithDestination => Command 父类的调用规则
+		Command.run				//传入参数为"/tmp/a"
+			Get.processOptions			//这里没有设置get的选项。
+				解析命令行的配置项目
+				getLocalDestination
+					这里只有一个参数，即没有设置目标参数，会设置dst为当前目录。否则会设置最后一个参数为dst。
+			Command.processRawArguments
+				Put.processArguments				//这里的传入参数是expandArguments(args)，该函数将参数列表转化为PathData类型的list
+					做了一个判断，啥意思?????
+					CommandWithDestination.processArguments						//这里传入的参数为get
+					 会检查dst文件是否存在
+						Command.processArguments					
+							遍历参数列表("这里为"/tmp/a"转化的PathData)
+								CommandWithDestination.processArgument								
+									做一些判断
+									Command.processPathArgument
+										Command.processPaths
+											遍历items
+												CommandWithDestination.processPath
+													copyFileToTarget
+														src.fs.open			//这里的fs应该为DistributedFileSystem
+															DistributedFileSystem.open				//第二个参数由"io.file.buffer.size"指定，默认4096
+																statistics.incrementReadOps			//设置统计参数
+																fixRelativePart									//处理相对路径
+																new FileSystemLinkResolver.doCall
+																	DFSClient.open								//返回DFSInputStream对象dfsis
+																	DFSClient.createWrappedInputStreamHdfsDataInputStream		//最后返回HdfsDataInputStream对象
+														copyStreamToTarget
+															根据target构造TargetFileSystem对象				//根据目的
+															设置临时的目标文件tempTarget，新构建的为目标文件结尾加上._COPYING_
+															setWriteChecksum
+															writeStreamToFile
+																创建FSDataOutputStream对象
+																IOUtils.copyBytes
+																IOUtils.closeStream
+															rename
+																修改临时文件的名称
+				                    preserveAttributes		     //修改属性
+				                    
 
 
+3 hdfs dfs -put a /tmp/
 
+
+4 关于FSNamesystem对象的说明与构造
+4.1 FSNamesystem的主要组件
+(1) FSDirectory对象dir
+	用于表示目录。
+
+4.2 FSNamesystem对象的构造
+	见"NameNode启动"
+	
 
 
