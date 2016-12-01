@@ -59,11 +59,14 @@ Command.expandArguments					// 参数传入为"/test"
 						遍历路径的components
 							会检查匹配，然后将component加到candidate中
 							遍历candidates					//这里不按照代码说明。实质就是按照根目录开始一层一层的使用listStatus找子目录，然后递归到最后得到FileStatus对象。这里需要关注一下listStatus的实现。
-								listStatus
-									DistributedFileSystem.listStatus
+								//第一个参数为传入的参数的某一级路径对应的字符串，第二个参数为HdfsFileStatus.EMPTY_NAME，
+								listStatus						
+									DistributedFileSystem.listStatus			//参数为传入的某目录项
 										FileSystemLinkResolver.resolve			//这里相当于执行doCall
 											FileSystemLinkResolver.doCall
 												listStatusInternal
+													dfs.listPaths									//第一个参数为传入的参数的某一级路径对应的字符串，第二个参数为HdfsFileStatus.EMPTY_NAME，
+														
 													dfs.listPaths									//dfs是DFSClient对象
 														namenode.getListing
 														会远程调用NameNodeRpcServer.getListing
