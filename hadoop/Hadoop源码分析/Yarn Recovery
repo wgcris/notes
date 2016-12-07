@@ -1,0 +1,145 @@
+1. RM Recovery
+
+ResourceManager.serviceStart
+	rmStore.checkVersion
+		RMStateStore.checkVersion
+			ZKRMStateStore.loadVersion	
+				获取versionNodePath，为$yarn.resourcemanager.zk-state-store.parent-path/ZKRMStateRoot/RMVersionNode			线上配置为/${cluster-name}-yarn/rmstore/ZKRMStateRoot/RMVersionNode
+				然后获取/${cluster-name}-yarn/rmstore/ZKRMStateRoot/RMVersionNode，根据protoc协议得到Version对象
+			如果版本不匹配就退出
+			如果主版本好相同，就保存这个版本信息到zk中
+	假如设置工作保存的话
+		获取/${cluster-name}-yarn/rmstore/ZKRMStateRoot/EpochNode的值并加1，如果zk不在在这个znode就用当前的epoch值加1并保存
+	rmStore.loadState
+		ZKRMStateStore.loadState
+			loadRMDTSecretManagerState
+				loadRMDelegationKeyState
+					从zk的节点(/${cluster-name}-yarn/rmstore/ZKRMStateRoot/RMDTSecretManagerRoot/RMDTMasterKeysRoot)获取DelegationKey
+					然后将这些DelegationKey保存到rmState.rmSecretManagerState.masterKeyState
+				loadRMSequentialNumberState
+					从zk的节点(/${cluster-name}-yarn/rmstore/ZKRMStateRoot/RMDTSecretManagerRoot/RMDTSequentialNumber)获取SequenceNumber
+					保存到rmState.rmSecretManagerState.dtSequenceNumber
+				loadRMDelegationTokenState
+					从zk的节点(/druid-yarn/rmstore/ZKRMStateRoot/RMDTSecretManagerRoot/RMDelegationTokensRoot)获取RMDelegationTokenIdentifierData
+					保存到rmState.rmSecretManagerState.delegationTokenState中
+			loadRMAppState
+				获取zk节点/${cluster-name}-yarn/rmstore/ZKRMStateRoot/RMAppRoot的所有节点的字符串childNodes(对应为应用名)
+				遍历app节点并加载，同时加载其appattemp信息													
+			loadAMRMTokenSecretManagerState
+				恢复zk节点/druid-yarn/rmstore/ZKRMStateRoot/AMRMTokenSecretManagerRoot的数据到rmState.amrmTokenSecretManagerState
+		Resourcemanager.recover
+			RMDelegationTokenSecretManager.recover
+			AMRMTokenSecretManager.recover
+			rmAppManager.recover
+				遍历app
+					recoverApplication
+						createAndPopulateNewRMApp
+							获取appid
+							validateAndCreateResourceRequest			//构造资源请求，主要是为具体应用的am构造请求					
+							构造application
+							加入应用到rmcontext中的app存储列表中
+							加入应用到applicationACLsManager中							
+						发送RMAppRecoverEvent事件						
+			setSchedulerRecoveryStartAndWaitTime
+				rmContext.setSchedulerRecoveryStartAndWaitTime
+					会设置RMActiveServiceContext.schedulerRecoveryStartTime和RMActiveServiceContext.schedulerRecoveryWaitTime
+					上面两个参数的设置主要是为了在重启操作之后在执行调度之前做一个延时。
+			
+
+处理RMAppRecoverEvent事件
+RMAppState.NEW ==(RMAppRecoverEvent,RMAppRecoveredTransition)==> RMAppState.SUBMITTED,ACCEPTED,FINISHED,FAILED,KILLED,FINAL_SAVING
+	RMAppRecoveredTransition.transition
+		RMAppImpl.recover
+			设置相关应用信息
+			createNewAttempt
+			RMAppAttemptImpl.recover
+				设置appattempt的参数
+				设置amcontainer,token,
+				recoverAppAttemptCredentials
+				...其他的恢复
+		假如app已经完成
+			app.recoverAppAttempts
+				对每个attempts发送类型为RMAppAttemptEventType.RECOVER的RMAppAttemptEvent事件
+			FinalTransition.transition
+			返回当前app的RMAppState状态，即最终状态
+		假如app下面没有attempts，则向调度器发送AppAddedSchedulerEvent，并返回RMAppState.SUBMITTED状态
+		app.recoverAppAttempts
+			为app下所有的attempt发送类型为RMAppAttemptEventType.RECOVER的RMAppAttemptEvent
+		假如当前的attemp的状态为KILLED或FINISHED或FAILED(且达到最大失败次数)，会直接返回RMAppState.ACCEPTED状态
+										
+处理类型为RMAppAttemptEventType.RECOVER的RMAppAttemptEvent事件
+	AttemptRecoveredTransition.transition
+		假如appAttempt已经完成
+			更新appattempt的进度为1
+			如果app不是最终状态
+				发送AppAttemptAddedSchedulerEvent
+				BaseFinalTransition.transition
+		如果appAttempt没有完成
+			如果配置了工作保存
+				appAttempt.masterService.registerAppAttempt				//这里注册appattempt
+				发送AppAttemptAddedSchedulerEvent
+			AMLaunchedTransition.transition
+			返回RMAppAttemptState.LAUNCHED													// 这里没有考虑launch失败但返回的情况。这里的解决方案是，等待amliveness的10min(默认)的健康检查。等待AM的重新注册表示AM程序已经launched
+
+
+
+
+recoveredFinalState 只有在RUNNING到FINAL_SAVING的过程会更新这个值，因此可以表示这个attempt已经完成或失败。
+
+
+2. 一个正常的app状态保存
+
+(1) RMAPP.New ==> RMAPP.NEW_SAVING
+RMAppNewlySavingTransition
+	RMStateStore.storeNewApplication
+
+(2) RMAppAttemptState.SUBMITTED ==> RMAppAttemptState.SCHEDULED
+ScheduleTransition
+如果是unmanagedam会调用storeAttempt
+
+(3) RMAppAttemptState.SCHEDULED ==> RMAppAttemptState.ALLOCATED_SAVING
+AMContainerAllocatedTransition
+	appAttempt.storeAttempt
+		RMStateStore.storeNewApplicationAttempt
+
+(4) RMAppAttemptState.RUNNING ==> RMAppAttemptState.FINAL_SAVING
+	FinalSavingTransition
+		rememberTargetTransitionsAndStoreState
+			updateApplicationState
+
+(5) RMAppAttemptState.FINAL_SAVING ==> RMAppAttemptState.FINISHING
+	FinalStateSavedTransition
+	
+
+3. RMStateStoreEventType中关于应用的存储状态的触发
+(1) STORE_APP_ATTEMPT
+会在RMAppAttemptState.SUBMITTED ==> RMAppAttemptState.SCHEDULED的状态转换过程中ScheduleTransition中执行storeAttempt触发存储操作。
+
+(2) STORE_APP
+会在RMAPP.New ==> RMAPP.NEW_SAVING的状态转换过程中RMAppNewlySavingTransition中storeNewApplication触发存储操作。
+
+(3) UPDATE_APP
+在rememberTargetTransitionsAndStoreState函数中调用了它。所有变为FINAL_SAVING状态的操作都会调用FinalSavingTransition执行app的状态更新。
+另外RMAppEventType.ATTEMPT_FAILED事件触发的AttemptFailedTransition也会调用rememberTargetTransitionsAndStoreState更新app的状态。
+总结: 这里所谓的更新实际上仅仅更新APP被杀死或失败或成功等完成的状态。
+
+(4) UPDATE_APP_ATTEMPT
+在rememberTargetTransitionsAndStoreState函数中调用了它。FinalSavingTransition, AMUnregisteredTransition, ContainerFinishedTransition中会调用它。
+总结: 同RMApp的操作, 这里也仅仅是在最终状态完成状态的更新保存。
+
+(5) REMOVE_APP,
+当达到一定数目后，在存储中删除app
+
+(6) FENCED
+存储出现问题的时候，会触发notifyStoreOperationFailed，RMStateStore进入FENCED状态，RM切换为standby
+
+
+
+
+目录
+
+
+
+[CompletedApps] [RunningApps]
+
+

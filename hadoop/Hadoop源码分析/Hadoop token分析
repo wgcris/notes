@@ -1,0 +1,7 @@
+参考文献:
+http://dongxicheng.org/mapreduce-nextgen/hadoop-yarn-security/
+
+(1) ResourceManager Delegation Token
+
+RMDelegationTokenSecretManager
+
