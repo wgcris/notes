@@ -4,18 +4,18 @@ AdminService有个组件embeddedElector(EmbeddedElectorService类)，会作为�
 EmbeddedElectorService::serviceInit
 	获取zkQuorum								//设置为ZK节点的访问地址。譬如: 172.22.96.70:2181,172.22.96.72:2181,172.22.96.74:2181
 	获取rmid,clusterId
-	createActiveNodeInfo			//?????
-	获取	zkBasePath						//yarn.resourcemanager.ha.automatic-failover.zk-base-path的值。譬如: /yarn-test/yarn-leader-election
+	createActiveNodeInfo			//转化为序列化的节点信息，包括rmid和clusterid
+	获取zkBasePath						//yarn.resourcemanager.ha.automatic-failover.zk-base-path的值。譬如: /yarn-test/yarn-leader-election
 	获取electionZNode					//${zkBasePath}/${clusterid}
 	获取zkSessionTimeout				//yarn.resourcemanager.zk-timeout-ms的值，默认10000。
-	获取zkAcls									//yarn.resourcemanager.zk-acl，默认world:anyone:rwcda。咱不考虑权限列表。
+	获取zkAcls									//yarn.resourcemanager.zk-acl，默认world:anyone:rwcda。
 	获取zkAuths								//yarn.resourcemanager.zk-auth,这里没配置，无默认值，为空。
 	构造ActiveStandbyElector对象elector					//构造函数通过connect构造zkClient
 	ensureParentZNode					//确保要使用znode的父节点存在，不存在就创建。
 	isParentZnodeSafe					//检查节点是否安全，通过是否存在子节点，集群id等方法确定
 EmbeddedElectorService::serviceStart
 	elector.joinElection			//传入了localActiveNodeInfo
-		arraycopy								//讲传入参数拷贝到appData
+		arraycopy								//将传入参数拷贝到appData
 		joinElectionInternal
 			createLockNodeAsync		//创建ZNode节点，为${zkBasePath}/${clusterid}/ActiveStandbyElectorLock
 
@@ -23,7 +23,7 @@ EmbeddedElectorService::serviceStart
 ResourceManager有组件activeServices(RMActiveServices类)
 
 
-一 RM端关于自动切换的说明
+1. RM端关于自动切换的说明
 ZooKeeper路径
 (1) zkLockFilePath
 RM开启服务之后在zookeeper建立的锁的路径为ActiveStandbyElector.zkLockFilePath，具体为:
@@ -80,6 +80,7 @@ EmbeddedElectorService::serviceStart
 							如果当前RM已经是ACTIVE状态，直接返回即可
 							fenceOldActive
 								zkClient.getData获取zkBreadCrumbPath的数据。
+								如果报当前znode节点不存在的异常，就返回，表示不用fencing。
 								如果获取的数据与当前节点相同，就返回。
 								如果获取的数据与当前节点不相同，执行appClient.fenceOldActive
 									由于appClient由子类传入，这里fenceOldActive为EmbeddedElectorService.fenceOldActive,但是2.7.2版本并没有实现FENCED。
@@ -121,7 +122,7 @@ WatcherWithClientRef::process
 		...首先处理一些连接，超时等时间，这不是重点关心的。
 		然后处理事件，如果是NodeDeleted事件(意味着原Active出问题了)，调用joinElectionInternal假如选举过程(即尝试创建节点)。如果是NodeDataChanged或其他时间，调用monitorActiveStatus继续监控状态。
 
-二 NM端关于自动切换的说明
+2. NM端关于自动切换的说明
 NM唯一的问题及时知道那个RM是ACTIVE即可。
 NodeStatusUpdaterImpl,YarnClientImpl,RMAdminCLI,AMRMClientImpl等类都会间接地调用createRMProxy对象来连接RM。
 以NodeStatusUpdaterImpl分析。
@@ -136,5 +137,138 @@ NodeStatusUpdaterImpl::getRMClient
 					使用yarn.client.failover-proxy-provider指定的类构造对象。如果配置不存在，使用ConfiguredRMFailoverProxyProvider。(这里使用默认值)
 					将构造的ConfiguredRMFailoverProxyProvide对象初始化后返回。
 					RetryProxy.create
-					...											?????没看懂,目前仅仅知道是从配置中获取两个RM，一次获取即可。
+					...											?????没看懂,目前仅仅知道是从配置中获取两个RM，一次获取即可
+					
+					
+					
+
+HDFS HA
+hdfs的ha通过启动zkfc来实现，下面分析zkfc
+1. 启动zk
+(1) zk常见命令
+启动zk命令: hadoop-daemons.sh --hosts nns start zkfc
+格式化zk命令: hdfs zkfc -formatZK
+(2) zk服务启动分析
+DFSZKFailoverController.main
+	DFSZKFailoverController.create
+		首先获取nsid和nnid
+		NameNode.initializeGenericKeys
+			设置配置项NameNode.initializeGenericKeys和配置项dfs.ha.namenode.id
+			setGenericConf					//对所有***.nsid.nnid的相关配置进行翻译，然后存入配置			
+			重新设置zkfc相关的配置项，即关于***.nsid.nnid的相关配置
+			构造一个NNHAServiceTarget对象，根据当前的nsid，nni以及配置
+			返回DFSZKFailoverController对象，传入了刚刚构造的NNHAServiceTarget对象和配置
+				...
+				NodeFencer.create			//构造fencer
+					得到dfs.ha.fencing.methods配置项的值，配置NNHAServiceTarget.fencer。这里配置为sshfence				
+			ZKFailoverController.run
+				检查dfs.ha.automatic-failover.enabled是否配置为true，只有为true的时候才开启自动切换
+				loginAsFCUser					//没有启动kerberos就不会生效
+				然后由于没有启动kerberos，直接还行run函数，根据调用直接执行doRun函数
+				doRun
+					initZK
+						获取ha.zookeeper.quorum的配置,为一组zk服务的地址，譬如172.16.177.127:2181,172.16.176.47:2181,172.16.176.49:2181
+						获取zk回话超时时间
+						获取ha.zookeeper.acl的值,默认值world:anyone:rwcda
+						构造acl对象
+						获取ha.zookeeper.auth配置，这里为null
+						获取ha.failover-controller.active-standby-elector.zk.op.retries的配置，默认为3，表示最大重试次数
+						构造ActiveStandbyElector对象elector
+					检查是否为formatZK操作				//该分支为hdfs zkfc -formatZK的分析
+						formatZK
+							elector.parentZNodeExists
+								检查ha.zookeeper.parent-znode/nsid配置项对应的znode是否存在。即/{cluster}-hadoop-ha/ns1
+							elector.clearParentZNode
+								递归删除/{cluster}-hadoop-ha/ns1下面的子目录
+							elector.ensureParentZNode
+								确保znode存在。不存在的话，会从父目录开始创建znode节点/{cluster}-hadoop-ha/ns1。这里创建的节点的权限均为world:anyone:rwcda	
+					localTarget.checkFencingConfigured			//检查NNHAServiceTarget.fencer是否构造成功
+					initRPC					//构造ZKFCRpcServer服务
+    			initHM					//初始化healthMonitor
+    				构造healthMonitor对象，并注册HealthCallbacks和ServiceStateCallBacks的回调服务。然后启动服务
+    			startRPC				//开启前rpc服务
+    			mainLoop				//开启循环，等待服务报错完成    				
+    			rpcServer.stopAndJoin							//关闭rpc服务
+      		elector.quitElection
+      			tryDeleteOwnBreadCrumbNode
+      				首先检查当前app数据是否与zkBreadCrumbPath的数据相同。如果不同，就报错返回。
+      				deleteWithRetries							//删除zkBreadCrumbPath对应节点。 节点为/${druid}-hadoop-ha/ns1/ActiveBreadCrumb					???这个节点权限是cdwra,会不会被恶意更改???
+							reset													//关闭zk连接							
+      		healthMonitor.shutdown
+      		healthMonitor.join								//关闭和等待healthMonitor服务结束
+				elector.terminateConnection					//关闭zk连接
+
+2. monitor组件分析
+会启动MonitorDaemon线程进行监控，主要从MonitorDaemon.run方法入手
+MonitorDaemon.run
+	loopUntilConnected
+		通过tryConnect创建proxy对象。如果抛出异常，会置状态State.SERVICE_NOT_RESPONDING
+	doHealthChecks
+		while循环												//目前该循环好像一直执行下去
+			proxy.getServiceStatus			//查询系统的ha状态
+			proxy.monitorHealth					//查询健康状态
+			没有返回异常，置healthy为true
+			如果返回异常为HealthCheckFailedException，则置State.SERVICE_UNHEALTHY，否则置State.SERVICE_NOT_RESPONDING
+			setLastServiceStatus				//更新状态,并initHM中注册的触发服务，ServiceStateCallBacks
+				ServiceStateCallBacks
+					verifyChangedServiceState
+						当ha状态发生切换的时候
+							更新相应状态
+							elector.quitElection
+								tryDeleteOwnBreadCrumbNode					//这里自己删除zk上的BreadCrumb节点，防止另一个NN进行fence
+								reset																//清空zk连接，这里会退出循环重新进入，并且重新建立连接
+			enterState									//更新状态,并initHM中注册的触发服务，HealthCallbacks
+				HealthCallbacks
+					setLastHealthState			//更新当前状态，以保证发现状态变化
+					recheckElectability
+						这里会有一个保持时间，防止进一步操作。然后调用scheduleRecheck，然后会重新调用recheckElectability。加保证recheckElectability操作在保持时间之后执行一次。
+					根据当前的不同状态来执行不同操作。
+					cae SERVICE_HEALTHY
+						elector.joinElection							// 加入选举
+							会更新appData
+							joinElectionInternal
+								createLockNodeAsync						//异步创建一个临时节点/${cluster}-hadoop-ha/ns1/ActiveStandbyElectorLock，回调函数为ActiveStandbyElector.processResult
+					cae INITIALIZING	
+						elector.quitElection							// 退出选举，已分析
+					case SERVICE_UNHEALTHY 或 SERVICE_NOT_RESPONDING
+						elector.quitElection							// 退出选举
+					case HEALTH_MONITOR_FAILED
+						会退出
+						
+
+3. failover分析
+(1) 正常流程的主动的选举
+当NN启动的时候，默认为standby状态。zkfc检查当前nn为health之后，会执行elector.joinElection试图在zk上创建一个节点/${cluster}-hadoop-ha/ns1/ActiveStandbyElectorLock。
+无论创建成功还是失败，都会执行回调函数ActiveStandbyElector.processResult
+ActiveStandbyElector.processResult				//最后参数为name的那个
+	如果返回成功，会调用becomeActive
+		如果becomeActive成功，会执行monitorLockNodeAsync调用zkClient.create，如果/${cluster}-hadoop-ha/ns1/ActiveStandbyElectorLock节点状态发生变化(创建或删除)，会调用ActiveStandbyElector.processResult(最后参数为state那个)
+		注: becomeActive调用分析如下：
+			becomeActive
+				fenceOldActive
+					得到/${druid}-hadoop-ha/ns1/ActiveBreadCrumb节点的数据。	如果节点不存在就表示没有active需要fence，直接退出fenceOldActive
+					appClient.fenceOldActive					//对于hdfs会调用ZKFailoverController.ElectorCallbacks.fenceOldActive
+						ZKFailoverController.fenceOldActive
+							ZKFailoverController.doFence
+								checkFencingConfigured			//检查是否配置fence
+								target.getFencer().fence(target)			//执行具体的fence操作			
+									method.method.tryFence					//对于ShellCommandFencer会构造shell脚本实现fence
+				writeBreadCrumbNode										//创建/${druid}-hadoop-ha/ns1/ActiveBreadCrumb节点并写入appData
+				appClient.becomeActive								//调用nn切为active的操作
+		reJoinElectionAfterFailureToBecomeActive	// 进行重新选举				
+	如果节点已经存在
+		becomeStandby										//相比becomeActive较为简单，仅仅是nn切换为standy
+		monitorActiveStatus
+	如果是因为连接丢失或超时引起的错误，会调用createLockNodeAsync，然后会重新执行这个流程
+	
+(2) 监控
+monitorActiveStatus会执行monitorLockNodeAsync调用zkClient.create，如果/${cluster}-hadoop-ha/ns1/ActiveStandbyElectorLock节点状态发生变化(创建或删除)，会调用ActiveStandbyElector.processResult(最后参数为state那个)
+这里从ActiveStandbyElector.processResult(最后参数为state那个)开始分析
+ActiveStandbyElector.processResult				//最后参数为state那个
+	会根据返回状态的连接判断当前active是否为自己，从而选择调用becomeActive或becomeStandby
+	如果节点不存在，表示节点被删除了
+		enterNeutralMode						//设置为neutral状态
+		joinElectionInternal				//进入选举
+	重试...
+//类似于之前create引发的processResult，目标是为了实时检查到zk节点发生变化，快速切换
 
