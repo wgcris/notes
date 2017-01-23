@@ -1,4 +1,4 @@
-/software/servers/spark-1.6.1-bin-2.7.1/bin/spark-submit --class org.apache.spark.examples.SparkPi --jars /software/servers/spark-1.6.1-bin-2.7.1/lib/spark-examples-1.6.1-hadoop2.7.1.jar --master yarn-cluster --executor-memory 20G --num-executors 3 hdfs://ns1/test/in 1000
+${SPARK_HOME}/bin/spark-submit --class org.apache.spark.examples.SparkPi --jars $SPARK_HOME/lib/spark-examples-1.6.1-hadoop2.7.1.jar --master yarn-cluster --executor-memory 20G --num-executors 3 hdfs://ns1/test/in 1000
 
 spark-submit定义如下:
 exec "$SPARK_HOME"/bin/spark-class org.apache.spark.deploy.SparkSubmit "$@"
@@ -45,5 +45,4 @@ ApplicationMaster.main
 /software/servers/spark-1.6.1-bin-2.7.1/bin/spark-submit --class org.apache.spark.examples.SparkPi --jars /software/servers/spark-1.6.1-bin-2.7.1/lib/spark-examples-1.6.1-hadoop2.7.1.jar --conf "spark.yarn.appMasterEnv.yarn.nodemanager.docker-container-executor.image-name=172.22.96.66:5000/centos_hadoop_spark:0.04" --conf "yarn.nodemanager.container-executor.class=org.apache.hadoop.yarn.server.nodemanager.DockerContainerExecutor"  --master yarn-cluster --executor-memory 20G --num-executors 3 hdfs://ns1/test/in 1000
 
 			
-		
-
+	
