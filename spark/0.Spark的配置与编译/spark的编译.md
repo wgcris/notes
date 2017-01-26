@@ -32,7 +32,7 @@ export MAVEN_OPTS="-Xmx2g -XX:ReservedCodeCacheSize=512m -XX:MaxPermSize=512M"
 mvn -Pyarn -Phadoop-2.7 -Dhadoop.version=2.7.1 -Phive -Phive-thriftserver -Pnative -DskipTests clean package
 ```
 
-> 如果出现如下错误，请手动下载scala-compiler-2.11.8.jar
+> 如果出现如下类型错误，请更换maven中央仓库地址后重试。
 > ```
 > Failed to execute goal net.alchim31.maven:scala-maven-plugin:3.2.2:compile (scala-compile-first) on project spark-tags_2.11: wrap: org.apache.maven.artifact.resolver.ArtifactResolutionException: Could not transfer artifact org.scala-lang:scala-compiler:jar:2.11.8 from/to central (https://repo1.maven.org/maven2): GET request of: org/scala-lang/scala-compiler/2.11.8/scala-compiler-2.11.8.jar from central failed
 > ```
