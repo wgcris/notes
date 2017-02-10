@@ -1,48 +1,407 @@
-${SPARK_HOME}/bin/spark-submit --class org.apache.spark.examples.SparkPi --jars $SPARK_HOME/lib/spark-examples-1.6.1-hadoop2.7.1.jar --master yarn-cluster --executor-memory 20G --num-executors 3 hdfs://ns1/test/in 1000
+Spark提交分析
 
+
+注: 调度器会计算RDD之间的依赖关系，将拥有持续窄依赖的RDD归并到同一个stage中，而宽依赖则作为划分不同的stage的判断标准。
+stage的划分是如何确定的呢? 其判断的重要依据就是是否存在ShuffleDependency，如果有则创建一个新的Stage。
+
+
+1. 版本信息
+spark-2.0.2
+
+2. 提交命令
+$SPARK_HOME/bin/spark-submit --class org.apache.spark.examples.SparkPi --master yarn --deploy-mode client --executor-memory 4G --num-executors 2 $SPARK_HOME/examples/jars/spark-examples_2.11-2.0.2.jar 1000
+
+3. 提交脚本的分析
 spark-submit定义如下:
-exec "$SPARK_HOME"/bin/spark-class org.apache.spark.deploy.SparkSubmit "$@"
+exec "${SPARK_HOME}"/bin/spark-class org.apache.spark.deploy.SparkSubmit "$@"
+提交命令可以展开为
+$SPARK_HOME/bin/spark-class org.apache.spark.deploy.SparkSubmit --class org.apache.spark.examples.SparkPi --master yarn --deploy-mode client --executor-memory 4G --num-executors 2 $SPARK_HOME/examples/jars/spark-examples_2.11-2.0.2.jar 1000
+这里在在spark-class文件中打印最后的执行命令，简化如下结果
+java -cp $SPARK_CONF_DIR:$SPARK_HOME/jars/* -Xmx1g org.apache.spark.deploy.SparkSubmit --master yarn --deploy-mode client --class org.apache.spark.examples.SparkPi --executor-memory 4G --num-executors 2 $SPARK_HOME/examples/jars/spark-examples_2.11-2.0.2.jar 1000
+总结: spark-submit实际上在java虚拟机运行了org.apache.spark.deploy.SparkSubmit类
 
-
-/bin/spark-class org.apache.spark.deploy.SparkSubmit --class org.apache.spark.examples.SparkPi --jars lib/spark-examples-1.6.1-hadoop2.7.1.jar --master yarn-cluster --executor-memory 20G --num-executors 3 hdfs://ns1/test/in 1000
-
+4. 源码分析
+4.1 程序的提交
 SparkSubmit.main
-	SparkSubmit.submit
-		prepareSubmitEnvironment		//这里是准备环境变量的过程
-			...	
-			这里设置了childMainClass为org.apache.spark.deploy.yarn.Client，猜测后面会调用该类
-			...
+	构造SparkSubmitArguments对象appArgs				//传入的参数为args,即--master yarn --deploy-mode client --class org.apache.spark.examples.SparkPi --executor-memory 4G --num-executors 2 $SPARK_HOME/examples/jars/spark-examples_2.11-2.0.2.jar 1000
+		根据propertiesFile解析得到默认配置到defaultProperties中，这里设置为lazy变量，用时加载，具体在mergeDefaultSparkProperties中配置，具体就是spark-default.conf的配置。
+		SparkSubmitOptionParser.parse
+			会依次设置SparkSubmitArguments的mainClass, master, deployMode, executorMemory, numExecutors
+			然后设置primaryResource为$SPARK_HOME/examples/jars/spark-examples_2.11-2.0.2.jar转化的url结果。			
+			最后将余下的参数写入childArgs中，这里参数为1000。						//这里使用--${key}类型的参数会配置，然后对直接的参数会加载到primaryResource中。处理完primaryResource后退出循环, 
+		mergeDefaultSparkProperties
+			如果用户没有指定配置(通过propertiesFile指定),就用默认的配置文件。关于默认配置，存在SPAKR_CONF_DIR会使用$SPAKR_CONF_DIR/spark-defaults.conf，否则会使用$SPAKR_HOME/conf/spark-defaults.conf
+			遍历defaultSparkProperties，放入到sparkProperties中。
+		ignoreNonSparkProperties
+			将sparkProperties中不是以"spark."开头的配置删除
+		loadEnvironmentArguments
+			加载一些必要的配置，这里包含一些默认的配置
+		validateArguments
+			由于没有指定，这里在loadEnvironmentArguments中默认设置为SUBMIT	
+	submit(appArgs)					// 提交应用
+		prepareSubmitEnvironment				//其中返回值childArgs为提交的参数和根据配置命令行。primaryResource为传入的primaryResource，即不带任务参数出入的jar包。sysProps为一些配置。childMainClass在yarn-cluster模式为org.apache.spark.deploy.yarn.Client，yarn-client模式为提交的主类。
+			设置clusterManager，deployMode 等...
+			doRunMain
+				这里没有设置代理用户
+				runMain			//传入参数为prepareSubmitEnvironment的返回值
+					设置类加载器，并将提交的jar包加载
+					设置系统属性
+					找到mainClass中的main函数, 并运行它。
+总结: 这里只分析yarn-client和yarn-cluster的情况。
+		 其中, yarn-client运行类为org.apache.spark.examples.SparkPi
+		 			yarn-cluster运行类为org.apache.spark.deploy.yarn.Client
 
-Client.main
-	...
-		Client.run
-			Client.submitApplication
-				createContainerLaunchContext
-					setupLaunchEnv			//这里会设置env
-						"spark.yarn.appMasterEnv.*" 可以传递给AM程序
-				...
-					设置command的时候，可以知道对于yarn，会启动org.apache.spark.deploy.yarn.ApplicationMaster类
+4.2 yarn-client运行类
+SparkPi.main
+	SparkSession.builder.appName("Spark Pi").getOrCreate
+		构造SparkSession.builder对象，设置名字为Spark Pi
+		getOrCreate
+			activeThreadSession
+				获取会话对象
+				如果已经配置了变量，设置会话的配置后直接返回session
+				构造sparkContext对象sc，传入的sparkConf对象已经包含了配置
+				根据sc构造SparkSession对象session
+				配置session，设置defaultSession
+				sparkContext.addSparkListener										//待分析
+	spark.sparkContext.parallelize.map
+		parallelize方法返回ParallelCollectionRDD对象，为org.apache.spark.rdd.RDD对象的子类。
+		RDD.map						
+			sc.clean
+			返回MapPartitionsRDD对象					//MapPartitionsRDD的第二个参数为一个函数，猜测意思是对每个迭代器执行map函数
+		RDD.reduce								//MapPartitionsRDD对象实际调用了RDD的reduce方法
+			cleanF=sc.clean(f)			//传入的函数为_+_，类型即(T, T) => T		
+			配置reducePartition			//reducePartition是一个为Iterator[T] => Option[T]类型的函数。具体的内容是对一个Iterator的各个元素进行reduceLeft操作，这里为加法操作。
+			配置mergeResult
+			sc.runJob				//三个参数
+				设置processFunc
+				runJob				//四个参数
+					val callSite = getCallSite  				//待分析
+					dagScheduler.runJob
+					rdd.doCheckpoint
 
+4.2.1 dagScheduler.runJob的执行
+dagScheduler.runJob
+	submitJob
+		检查传入的分区序号partitions是否正确。这里不会出错，因为在runJob中设置了partitions为0 until rdd.partitions.length
+		生成jobid
+		构造JobWaiter对象
+		eventProcessLoop.post						//发送JobSubmitted事件，参数意思如下
+																		//jobid略。rdd为当前的RDD，即MapPartitionsRDD。func2为之前配置的reducePartition。partitions.toArray为分区序号列表。callsite？。waiter为新构造的JobWaiter对象。最后为properties的序列号值。
+	waiter.completionFuture.ready			//阻塞等待返回值
+	
+4.2.2 从JobSubmitted事件开始的事件处理流程。							//注: 从spark-2.0开始已经不再使用akka，而是类似于yarn的自己设计的事件处理器
+处理JobSubmitted事件
+	dagScheduler.handleJobSubmitted
+		newResultStage							//构造ResultStage类型的对象finalStage
+			getParentStagesAndId			//获取所有服stage和id
+			根据获取的父亲stages构造ResultStage对象，并加入到stageIdToStage中
+			updateJobIdStageIdMaps
+				更新stage的jobid
+				将新的stageid加入到jobIdToStageIds中。					//jobIdToStageIds是记录job下一组stageid的map
+				获取该rdd，jobid下的所有父stage，并过滤当前层。继续递归向下一层执行。最终，将这个新的stageid记录到所有的子stage中。
+		构造ActiveJob对象job，并将其加入到jobIdToActiveJob和activeJobs中
+		为finalStage对象设置activeJob
+		然后获取stageid列表，并转化为对应的stageInfos
+		listenerBus.post					//发送SparkListenerJobStart事件
+		submitStage								//递归地将所有的stage加入到waitingStages。如果当前parent没有尚未提交的stage的时候调用submitMissingTasks提交
+			submitMissingTasks
+				stage.pendingPartitions.clear		//清除stage下面的对一个的PENDING的partitions。这里面，一个stage会有对应分区个数的partitions
+				findMissingPartitions						//通过stage.findMissingPartitions方法查询各个分区的完成情况
+				将stage加入到runningStages中
+				根据stage的类型进行匹配,这里为ResultStage					//stage仅有ShuffleMapStage和ResultStage两种类型
+					outputCommitCoordinator.stageStart					//outputCommitCoordinator暂时不分析
+				获取各个分区的location信息到taskIdToLocations
+				stage.makeNewStageAttempt
+					更新了metric，然后构造StageInfo对象，更新到_latestInfo
+				listenerBus.post						//发送SparkListenerStageSubmitted事件
+				将stage对应的RDD进行序列化为taskBinaryBytes
+				然后将taskBinaryBytes封装为广播变量taskBinary
+				根据各个分区构造ResultTask任务(或ShuffleMapTask任务)，任务列表记录在tasks中
+				然后将之前要提交的任务对应的分区序号加入到pendingPartitions中
+				taskScheduler.submitTasks
+					TaskSchedulerImpl.submitTasks
+						构造一个TaskSetManager管理器manager，并设置最大失败次数
+						再将这个manager加入到taskSetsByStageIdAndAttempt中。taskSetsByStageIdAndAttempt中第一层key为stage，第二层key为taskSet.stageAttemptId
+						然后需要检查是否有冲突的taskSet
+						schedulableBuilder.addTaskSetManager
+						backend.reviveOffers				//实际调用CoarseGrainedSchedulerBackend类的方法
+							CoarseGrainedSchedulerBackend.reviveOffers
+								driverEndpoint.send(ReviveOffers)				//实际调用NettyRpcEndpointRef，是名称为"CoarseGrainedScheduler"的driverEndpoint
+									NettyRpcEndpointRef.send(ReviveOffers)
+										nettyEnv.send(RequestMessage(nettyEnv.address, this, message))
+											获取了remoteAddr
+											如果remoteAddr与address相同，则发送dispatcher.postOneWayMessage(message)。否则调用postToOutbox。
+				更新该stage的最新提交时间
+		submitWaitingStages					//提交之前等待的stage
+		
+处理SparkListenerJobStart事件
+	listener.onJobStart(jobStart)							// jobStart为SparkListenerJobStart事件
+分两步处理: 
+(1) EventLoggingListener处理分支						//以后不再分析EventLoggingListener处理分支
+logEvent(event, flushLogger = true)				//参数为SparkListenerJobStart事件
+是指就是保存日志
+(2) JobProgressListener处理分支
+JobProgressListener.onJobStart	
+	获取jobGroup，即job组id									//这里应该么有设置
+	构造JobUIData对象jobData
+	更新jobGroupToJobIds										//将jobid加入到对应的jobgroup组中，这里实际为null组
+	将stage加入到pendingStages中
+	统计所有没有完成的stage对应的task的数目
+	把之前构造的jobData加入到jobIdToData和activeJobs中
+	更新stageIdToActiveJobIds、stageIdToInfo、stageIdToData等
 
+处理SparkListenerStageSubmitted事件
+	listener.onStageSubmitted(stageSubmitted)		
+		将当前的stage加入到activeStages中，并从pendingStages拿出
+		从spark.scheduler.pool配置项中获取spark的资源pool，这里使用默认的default
+		将stage信息加入到stageIdToInfo中
+		修改stageIdToData中的stage的资源poll名称和描述信息
+		设置poolToActiveStages
+		根据stageid获取对应的jobid，然后累加numActiveStages，并将他从completedStageIndices去掉(主要是为了重试)
 
+处理submitTasks中postOneWayMessage发送的消息
+	Inbox.process
+		endpoint.receive.applyOrElse			//实际调用DriverEndpoint方法
+			DriverEndpoint.receive
+				进入ReviveOffers分支
+					makeOffers
+						从executorDataMap中剔除没有alive的executor		//executorDataMap的由来是在CoarseGrainedExecutorBackend的OnStart方法注册而来的。问题是yarn模式下如何注册?????
+						根据activeExecutors构造对应的WorkerOffer
+						launchTasks
+注: 整理的问题在于部署模式，在不同的模式下如何生成了executorDataMap，也即在yarn模式下如何生成yarn层面上的appmaster，spark层面上的work的						
+		根据"部署模式"一节，可以得知，yarn-cluster模式，在构造SparkContext的时候会向yarn提交任务，同时申请container生成CoarseGrainedExecutorBackend，通知会注册。因此填充了executorDataMap
+		
+这里接着launchTasks分析
+launchTasks
+	ser.serialize
+	获得task的executorid，并得到executorData
+	更新executorData的核心数
+	executorData.executorEndpoint.send(LaunchTask(new SerializableBuffer(serializedTask)))					// 发送任务。根据NettyRpcEnv.send这里会发送一个rpc远程任务。
+	
+总结: 截止这里，yarn-client模式下,driver端的一些构造到发送远程任务的过程已经完成。
+		
+4.3.3 部署模式
+构造SparkContext对象的时候有_taskScheduler.start的语句，从这里开始分析
+_taskScheduler.start						//_taskScheduler为TaskSchedulerImpl
+	backend.start									//对于yarn-client模式返回YarnClientSchedulerBackend对象。对于yarn-cluster模式返回YarnClusterSchedulerBackend对象。
+	这里先以yarn-client分析
+		YarnClientSchedulerBackend.start
+			获取host和ip
+			设置参数ClientArguments
+			根据spark.executor.instances获得totalExpectedExecutors，即executor的个数
+			super.start()
+			构造Client对象，作为yarn的客户端
+			bindToYarn(client.submitApplication(), None)							// 向yarn提交应用，并将返回的appid绑定给spark
+			waitForApplication																				// 等待app进入running状态
+			asyncMonitorApplication																		// 启动异步监控线程
+
+在submitApplication中的createContainerLaunchContext中可以知道:
+对于yarn-client，am提交类为org.apache.spark.deploy.yarn.ExecutorLauncher
+对于yarn-cluster,am提交类为org.apache.spark.deploy.yarn.ApplicationMaster
+
+(a)下面对yarn-client模式进行分析:
+ExecutorLauncher的main函数实质上也是ApplicationMaster.main。会在yarn集群的一个节点启动一个AM程序。
 ApplicationMaster.main
 	...
-		ExecutorRunnable.prepareEnvironment设置了AM分配的Container的env
+	master.run
+		...
+		runExecutorLauncher
 			...
-			runAllocatedContainers
-				ExecutorRunnable.run
-					startContainer
-						prepareEnvironment
-							两种方式传入: 
-								(1) 通过spark.executorEnv.*指定
-								(2) 通过系统的环境变量SPARK_YARN_USER_ENV执行
-						ctx.setEnvironment(env)
-			...
+			registerAM
+				allocator = client.register
+				allocator.allocateResources
+					updateResourceRequests						// 根据配置的executor的个数来更新请求
+					amClient.allocate									// 分配
+					handleAllocatedContainers
+						...
+						runAllocatedContainers
+							launcherPool.execute执行线程ExecutorRunnable，具体的startContainer函数中，可以得实际的启动类为org.apache.spark.executor.CoarseGrainedExecutorBackend							
+					processCompletedContainers					
+由此，可以分析得到启动具体的worker节点(实际是CoarseGrainedExecutorBackend)的过程
+(b)下面对yarn-cluster模式进行分析:
+暂不分析
+
+4.3.2 Worker端执行任务任务
+yarn-client模式下具体的执行为CoarseGrainedExecutorBackend
+CoarseGrainedExecutorBackend.main
 	...
+	CoarseGrainedExecutorBackend.run
+		...
+		env = SparkEnv.createExecutorEnv					//可以知道这里也构造了NettyRpcEnv，可以接受任务
+		env.rpcEnv.setupEndpoint
 
-				
-				
-/software/servers/spark-1.6.1-bin-2.7.1/bin/spark-submit --class org.apache.spark.examples.SparkPi --jars /software/servers/spark-1.6.1-bin-2.7.1/lib/spark-examples-1.6.1-hadoop2.7.1.jar --conf "spark.yarn.appMasterEnv.yarn.nodemanager.docker-container-executor.image-name=172.22.96.66:5000/centos_hadoop_spark:0.04" --conf "yarn.nodemanager.container-executor.class=org.apache.hadoop.yarn.server.nodemanager.DockerContainerExecutor"  --master yarn-cluster --executor-memory 20G --num-executors 3 hdfs://ns1/test/in 1000
+处理Driver端的请求，Driver端的LaunchTask(new SerializableBuffer(serializedTask))请求
+CoarseGrainedExecutorBackend.receive
+	case LaunchTask(data)分支
+		ser.deserialize						// 反序列化
+		executor.launchTask				// 构造一个线程对象，放入线程池中执行
 
-			
+
+
+附录1 SparkContext分析
+1. listenerBus对象
+istenerBus为LiveListenerBus类型的对象。该对象在SparkContext的构造函数中调用setupAndStartListenerBus方法内启动。
+主要有addListener和post两个方法使用，同时还有启动服务的方法，下面是分析:
+(1) addListener
+该方法实际调用了父类ListenerBus的方法
+LiveListenerBus的内部对象listeners类型为CopyOnWriteArrayList，是一个List，addListener仅仅将listener加入到该列表中
+(2) post											
+LiveListenerBus.post					//传入的参数为事件
+	eventQueue.offer						//将事件加入到事件队列中
+	如果没有超过事件队列容量(默认为10000)，会释放信号量。否则调用onDropEvent方法，报错。
+(3)	start
+LiveListenerBus.start
+	listenerThread.start
+		listenerThread.run							//注: 这里使用了函数tryOrStopSparkContext，该函数有两个括号作为参数，这里第二个为语句块。
+			获取信号量
+			循环获取时间，并调用postToAll执行		
+				ListenerBus.postToAll
+					会遍历listener，调用doPostEvent方法
+						SparkListenerBus.doPostEvent
+							会匹配不同的事件，调用具体listener的处理方法					
+
+
+问: 是会怎么选择listener呢? 通过遍历listener提交的方式较为低效。
+以SparkListenerJobStart事件的处理为例子，来分析这个过程。
+对于SparkContext已经注册的lisenter有两或三个(DeveloperApi除外): JobProgressListener，EventLoggingListener。注: extraListeners(通过spark.extraListeners配置，这里么有配置，就可以忽略)
+listener.onJobStart(jobStart)，其中两个listener均实现了onJobStart方法。							
+
+2. taskScheduler函数
+实际使用_taskScheduler通过SparkContext.createTaskScheduler构造
+SparkContext.createTaskScheduler
+	case masterUrl分支
+		getClusterManager								// 会利用ServiceLoader技术加载YarnClusterManager类，并构造对象cm
+		cm.createTaskScheduler					// 对于yarn-client模式返回YarnScheduler对象。对于yarn-cluster对象返回YarnClusterScheduler对象。
+		cm.createSchedulerBackend				// 对于yarn-client模式返回YarnClientSchedulerBackend对象。对于yarn-cluster模式返回YarnClusterSchedulerBackend对象。
+																		// 两者均继承自YarnSchedulerBackend，又继承自CoarseGrainedSchedulerBackend。构造函数的参数分别为scheduler和sc
+		cm.initialize										
+			scheduler.asInstanceOf[TaskSchedulerImpl].initialize			//无论是yarn-client还是yarn-cluster，都会调用TaskSchedulerImpl.initialize
+				构造调度器schedulableBuilder															//通过spark.scheduler.mode配置，默认为FIFO
+
+3 env组件
+通过createSparkEnv创建
+createSparkEnv(_conf, isLocal, listenerBus)											//_conf为配置信息。isLocal是根据spark.master是否为local决定，这里为false。listenerBus为SparkContext中构造的LiveListenerBus对象
+	SparkEnv.createDriverEnv(conf, isLocal, listenerBus, SparkContext.numDriverCores(master))
+		获取hostname和port						//构造SparkContext的时候，会配置spark.driver.host为本机ip，配置spark.driver.port为0
+		create		//conf为配置信息。executorId为字符串"driver"。hostname和port为前面获取的值。isDriver为true。isLocal这里为false，仅当local模式为true。numUsableCores表示核心数，仅当local模式生效。listenerBus为SparkContext中构造的LiveListenerBus对象。
+			构造securityManager对象
+			设置systemName为"sparkDriver"
+			rpcEnv = RpcEnv.create		//返回NettyRpcEnv对象。由于传入的端口为0，这里会生成一个随机端口
+			设置"spark.driver.port"，为上一步获得的随机端口
+			构造serializer对象，会根据配置项"spark.serializer"指示，默认为org.apache.spark.serializer.JavaSerializer
+			构造serializerManager，closureSerializer，broadcastManager，mapOutputTracker对象
+			registerOrLookupEndpoint								//注册MapOutputTrackerEndpoint，暂不分析
+			构造shuffleManager											 // 暂不分析
+			.....
+							
+附录2 DAGScheduler分析
+使用的DAGScheduler对象通过SparkContext._dagScheduler处理
+1. eventProcessLoop对象
+eventProcessLoop是DAGSchedulerEventProcessLoop类，是一个事件处理器
+DAGScheduler的构造函数中会调用eventProcessLoop.start方法，启动事件处理器
+eventProcessLoop.start
+	EventLoop.onStart					//什么都没做
+	eventThread.start
+		不断阻塞地从事件队列中拿出事件，放到onReceive中处理
+			onReceive
+				doOnReceive					//处理具体事件
+2. listenerBus对象
+在SparkContext中，构造DAGScheduler时候传入其引用
+
+
+附录3 TaskSchedulerImpl分析
+1.
+
+
+附录4 CoarseGrainedSchedulerBackend
+1 driverEndpoint组件
+driverEndpoint = createDriverEndpointRef(properties)														//是driverEndpoint，名称为"CoarseGrainedScheduler"。
+	rpcEnv.setupEndpoint(ENDPOINT_NAME, createDriverEndpoint(properties))					//CoarseGrainedScheduler为"CoarseGrainedScheduler"。rpcEnv为sc.env.rpcEnv，设置为NettyRpcEnv。对于createDriverEndpoint，构造了一个DriverEndpoint对象
+		dispatcher.registerRpcEndpoint(name, endpoint)															//将构造的NettyRpcEndpointRef对象，放入部分集合中，并方法
+		
+2 org.apache.spark.rpc.netty.Dispatcher的说明
+该类用于转发rpc请求到恰当的消息。在SparkContext._env(SparkEnv).rpcEnv(NettyRpcEnv)中声明。
+会构造一组线程池，不断地从receivers中获取EndpointData对象，然后调用EndpointData.inbox.process处理，process中会不断地从inbox中的messages拿出消息，然后根据消息类型处理
+(a) 关键组件
+EndpointData	用于记录所有注册过的EndpointData对象
+receivers			用于记录已经有message的EndpointData对象，当然一定是注册过的
+(b) registerRpcEndpoint
+	向endpoints，endpointRefs，receivers注册数据
+	由于Inbox类在构造函数中会在messages中加入OnStart，所以会在process中执行一次OnStart操作
+(c) postOneWayMessage,postLocalMessage,postRemoteMessage,postToAll
+	会向对应的endpoints发送消息
 	
+附录5 CoarseGrainedSchedulerBackend中executorDataMap的说明
+executor启动的时候注册的时候会更更新driver端的executorDataMap
+
+
+传给am和executor环境变量的方法:
+(1) "spark.yarn.appMasterEnv.*" 可以传递给AM程序
+(2) 通过spark.executorEnv.*指定
+
+下面以一个WordCount有数据的实例进行分析
+提交命令:
+$SPARK_HOME/bin/spark-submit --class com.zcy.spark.MyWordCount --master yarn --deploy-mode client --executor-memory 4G --num-executors 2 --jars ./sparkTest.jar .sparkTest.jar /tmp/words
+源码:
+    var inputFile:String = null
+    if(args.length>=1) inputFile=args(0)
+    val sc = new SparkContext()
+    val lines = sc.textFile(inputFile).flatMap(lines=>lines.split(" "))
+    val count = lines.map(word=>(word,1)).reduceByKey((x,y)=>x+y)
+    count.saveAsTextFile(inputFile+".out")
+
+分析:
+(1) sc.textFile					//第一个参数为/tmp/words。第二个参数没有设置，这里为2
+										//使用SparkContext.defaultMinPartitions，他的值为math.min(defaultParallelism, 2)。其中可以通过spark.default.parallelism配置，没有配置为math.max(totalCoreCount.get(), 2)
+	hadoopFile(path, classOf[TextInputFormat], classOf[LongWritable], classOf[Text],minPartitions).map(pair => pair._2.toString).setName(path)	
+		(a)先分析FileSystem.getLocal(hadoopConfiguration)函数
+			FileSystem.getLocal(hadoopConfiguration)				// 为了加载hdfs-site.xml
+			broadcast																				// 把hadoop配置序列化后通过广播变量发布
+			设置函数setInputPathsFunc，输入JobConf，然后会调用FileInputFormat.setInputPaths
+			返回一个HadoopRDD对象					//sc为当前的SparkContext对象。broadcastedConf为广播的hadoop配置信息。initLocalJobConfFuncOpt为上面的转化函数setInputPathsFunc。inputFormatClass为TextInputFormat。keyClass为LongWritable。valueClass为Text。minPartitions为2。
+		(b)然后分析.map部分
+			HadoopRDD没有实现map方法，因此调用RDD.map
+			RDD.map
+				new MapPartitionsRDD[U, T](this, (context, pid, iter) => iter.map(cleanF))						
+					map函数返回一个MapPartitionsRDD对象。
+					第一个参数为this，指向这个HadoopRDD对象，根据继承的构造函数可以知道得到，会将SparkContext对象传给下一个HadoopRDD，然后还会构造一个OneToOneDependency依赖。说明这个HadoopRDD对象与接下来的MapPartitionsRDD对象有一对一的依赖关系。
+					第二个参数为传入的一个函数指针，会在compute中使用。
+		(c)setName 设置名称
+		
+截止到这里有这样一组RDD的对应关系
+
+HadoopRDD	---> MapPartitionsRDD
+
+(2) .flatMap(lines=>lines.split(" "))
+调用了RDD.flatMap，同RDD.map函数一样，也是返回了一个MapPartitionsRDD对象，唯一不同的是第二个参数的转换函数更换为flatMap
+	
+截止到这里有这样一组RDD的对应关系
+
+HadoopRDD	---> MapPartitionsRDD  --> MapPartitionsRDD
+<-----textFile------>   <-------flatMap------->
+
+(3) lines.map(word=>(word,1))
+分析同上。返回了一个MapPartitionsRDD对象。
+
+截止到这里有这样一组RDD的对应关系
+
+HadoopRDD	---> MapPartitionsRDD  --> MapPartitionsRDD  --> MapPartitionsRDD
+<-----textFile------>  <-------flatMap-------> <-------map------->
+
+(4) .reduceByKey((x,y)=>x+y)
+在RDD.scala中有隐含函数rddToPairRDDFunctions，会将MapPartitionsRDD转化为PairRDDFunctions，传入的值为原理的rdd
+.reduceByKey((x,y)=>x+y)
+	reduceByKey(defaultPartitioner(self), func)		
+		这里先分析defaultPartitioner
+			defaultPartitioner
+				对于MapPartitionsRDD，其partitioner会获取第一个parent RDD的分区。
+				第一个RDD为HadoopRDD，没有实现partitioner方法，会调用RDD.partitioner。会调用HadoopRDD.getPartitions设置分区，为HadoopPartition。
+				分区数为defaultMinPartitions，这里为2。
+		这里再分析reduceByKey
+		reduceByKey
+			combineByKeyWithClassTag				// 参数分别为:(1) 函数(v: V) => v (2) reduceByKey传入函数 (3) reduceByKey传入函数 (4) 分区
+				构造一个Aggregator对象，传入的参数分别为combineByKeyWithClassTag的前三个参数
+				self(之前的最后一个MapPartitionsRDD).partitioner为最早的一个父RDD的分区， 与传入的partitioner相同
+					self.mapPartitions					// 传入一个返回InterruptibleIterator对象的函数，传入preservesPartitioning为true
+
+

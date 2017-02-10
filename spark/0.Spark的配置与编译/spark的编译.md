@@ -36,3 +36,10 @@ mvn -Pyarn -Phadoop-2.7 -Dhadoop.version=2.7.1 -Phive -Phive-thriftserver -Pnati
 > ```
 > Failed to execute goal net.alchim31.maven:scala-maven-plugin:3.2.2:compile (scala-compile-first) on project spark-tags_2.11: wrap: org.apache.maven.artifact.resolver.ArtifactResolutionException: Could not transfer artifact org.scala-lang:scala-compiler:jar:2.11.8 from/to central (https://repo1.maven.org/maven2): GET request of: org/scala-lang/scala-compiler/2.11.8/scala-compiler-2.11.8.jar from central failed
 > ```
+
+* 如果向直接生成部署包，可以使用如下面命令编译。 根目录会生成安装包spark--bin-custom-spark.tgz
+
+```
+./dev/make-distribution.sh --name custom-spark --tgz -Phadoop-2.7 -Phive -Phive-thriftserver -Pyarn
+```
+
