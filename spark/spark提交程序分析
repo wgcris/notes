@@ -362,7 +362,7 @@ $SPARK_HOME/bin/spark-submit --class com.zcy.spark.MyWordCount --master yarn --d
 		(b)然后分析.map部分
 			HadoopRDD没有实现map方法，因此调用RDD.map
 			RDD.map
-				new MapPartitionsRDD[U, T](this, (context, pid, iter) => iter.map(cleanF))						
+				new MapPartitionsRDD[U, T](this, (context, pid, iter) => iter.map(cleanF))			其中preservesPartitioning默认为false			
 					map函数返回一个MapPartitionsRDD对象。
 					第一个参数为this，指向这个HadoopRDD对象，根据继承的构造函数可以知道得到，会将SparkContext对象传给下一个HadoopRDD，然后还会构造一个OneToOneDependency依赖。说明这个HadoopRDD对象与接下来的MapPartitionsRDD对象有一对一的依赖关系。
 					第二个参数为传入的一个函数指针，会在compute中使用。
@@ -372,7 +372,7 @@ $SPARK_HOME/bin/spark-submit --class com.zcy.spark.MyWordCount --master yarn --d
 
 HadoopRDD	---> MapPartitionsRDD
 
-(2) .flatMap(lines=>lines.split(" "))
+(2) .flatMap(lines=>lines.split(" "))  其中preservesPartitioning默认为false	
 调用了RDD.flatMap，同RDD.map函数一样，也是返回了一个MapPartitionsRDD对象，唯一不同的是第二个参数的转换函数更换为flatMap
 	
 截止到这里有这样一组RDD的对应关系
@@ -380,11 +380,10 @@ HadoopRDD	---> MapPartitionsRDD
 HadoopRDD	---> MapPartitionsRDD  --> MapPartitionsRDD
 <-----textFile------>   <-------flatMap------->
 
-(3) lines.map(word=>(word,1))
+(3) lines.map(word=>(word,1))  其中preservesPartitioning默认为false	
 分析同上。返回了一个MapPartitionsRDD对象。
 
 截止到这里有这样一组RDD的对应关系
-
 HadoopRDD	---> MapPartitionsRDD  --> MapPartitionsRDD  --> MapPartitionsRDD
 <-----textFile------>  <-------flatMap-------> <-------map------->
 
@@ -393,15 +392,23 @@ HadoopRDD	---> MapPartitionsRDD  --> MapPartitionsRDD  --> MapPartitionsRDD
 .reduceByKey((x,y)=>x+y)
 	reduceByKey(defaultPartitioner(self), func)		
 		这里先分析defaultPartitioner
-			defaultPartitioner
-				对于MapPartitionsRDD，其partitioner会获取第一个parent RDD的分区。
-				第一个RDD为HadoopRDD，没有实现partitioner方法，会调用RDD.partitioner。会调用HadoopRDD.getPartitions设置分区，为HadoopPartition。
-				分区数为defaultMinPartitions，这里为2。
+			defaultPartitioner			
+				对于MapPartitionsRDD，由于preservesPartitionin为false，实际partitioner是没有设置的。								//如果preservesPartitionin为true，其partitioner会获取第一个parent RDD的分区。
+				会构造一个HashPartitioner对象					//传入的是bySize.head.partitions.length，是指就是第一个分区的个数
+																						//第一个RDD为HadoopRDD，没有实现partitioner方法，会调用RDD.partitioner。会调用HadoopRDD.getPartitions设置分区，为HadoopPartition。分区数为defaultMinPartitions，这里为2。
 		这里再分析reduceByKey
 		reduceByKey
 			combineByKeyWithClassTag				// 参数分别为:(1) 函数(v: V) => v (2) reduceByKey传入函数 (3) reduceByKey传入函数 (4) 分区
 				构造一个Aggregator对象，传入的参数分别为combineByKeyWithClassTag的前三个参数
-				self(之前的最后一个MapPartitionsRDD).partitioner为最早的一个父RDD的分区， 与传入的partitioner相同
-					self.mapPartitions					// 传入一个返回InterruptibleIterator对象的函数，传入preservesPartitioning为true
+				self(之前的最后一个MapPartitionsRDD).partitioner为null(preservesPartitioning默认为false)， 与传入的partitioner不相同
+					返回一个ShuffledRDD对象
+					设置serializer,这里为null
+					设置aggregator
+					设置mapSideCombine，这里为true
 
+截止到这里有这样一组RDD的对应关系
+HadoopRDD	---> MapPartitionsRDD  --> MapPartitionsRDD  -->  MapPartitionsRDD  --> ShuffledRDD
+<-----textFile------>  <-------flatMap------->  <-------map------->  <-------reduceByKey------->
+
+(5) count.saveAsTextFile
 

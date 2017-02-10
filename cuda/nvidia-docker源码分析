@@ -1,0 +1,81 @@
+1 nvidia-docker-plugin分析
+main
+	nvidia.LoadUVM
+		检查设备文件/dev/nvidia-uvm是否存在
+		执行命令"nvidia-modprobe -u -c=0"
+	nvidia.Init
+		设置环境变量CUDA_DISABLE_UNIFIED_MEMORY为1
+		设置环境变量CUDA_CACHE_DISABLE为1
+		删除环境变量CUDA_VISIBLE_DEVICES
+		nvml.Init
+			init_
+				C.nvmlInit_dl		//调动C函数nvmlInit_dl
+	nvidia.LookupDevices
+		nvml.GetDeviceCount
+			deviceGetCount
+				C.nvmlDeviceGetCount		// 获取设备数目
+		得到设备信息和cuda对应的信息，构成Device结构体
+		然后获得设备之间的拓扑信息
+	nvidia.LookupVolumes					//猜测是查找库，判断是否正常安装的过程
+		将操作库加载到Volumes中
+	开启plugin和remote服务
+
+
+2 nvidia-docker分析
+main
+	如果不是docker create或docker run，就正常执行docker命令
+	如果是docker create或docker run
+		VolumesNeeded
+			docker.ImageExists 			//查看镜像名，是否存在
+			没有镜像，就去拉镜像
+			读取镜像的"com.nvidia.volumes.needed"这个Label的值
+		假如读取的label不为空
+			这里没有设置NV_HOST,DOCKER_HOST，可以认为host为nil
+				nvidia.LoadUVM
+				nvidia.Init
+				GenerateLocalArgs
+					得到版本信息，判断镜像是否支持该版本的cuda。宿主机cuda的版本必须大于docker镜像的cuda版本
+					devicesArgs
+						GetControlDevicePaths					//  返回三个设备的字符串: /dev/nvidiactl /dev/nvidia-uvm /dev/nvidia-uvm-tools(根据时间判断是否有没有)
+						增加如下参数 --device=/dev/nvidiactl --device=/dev/nvidia-uvm --device=/dev/nvidia-uvm-tools
+						LookupDevices
+						然后判断GPU长度是否为0.通过NV_GPU设置，用空格或逗号隔开。
+						如果GPU长度为0，参数在将所有的GPU加载  --device=/dev/nvidia0 ....
+						如果GPU长度不为0，调用FilterDevices。根据NV_GPU的内容配置，可以通过GPU-0,GPU-1的方式或0,1的方式配置(当然也可以使用空格分开)
+					volumesArgs											//  挂载了一些驱动文件 					
+				nvidia.Shutdown
+	执行docker命令
+
+3. 安装步骤
+# Install nvidia-docker and nvidia-docker-plugin
+wget -P /tmp https://github.com/NVIDIA/nvidia-docker/releases/download/v1.0.0/nvidia-docker_1.0.0_amd64.tar.xz
+sudo tar --strip-components=1 -C /usr/bin -xvf /tmp/nvidia-docker*.tar.xz && rm /tmp/nvidia-docker*.tar.xz
+
+# Run nvidia-docker-plugin
+sudo -b nohup nvidia-docker-plugin > /tmp/nvidia-docker.log
+
+# Test nvidia-smi
+
+说明: 
+(1) 如果不开启nvidia-docker-plugin的情况下，docker volume 没有创建nvidia-docker驱动的情况下，无法使用docker run。如果开启nvidia-docker-plugin，docker run之后会创建开启nvidia-docker-plugin。
+(2) 如果不开启nvidia-docker-plugin，cuda_test5执行的时间会变得非常长。这里并不是GPU变慢，猜测是获取GPU的信息变慢。(docker内外均出现这个现象)
+		经过试验发现cuda_test5第一处掉用显卡的函数cudaGetDeviceCount，在开启nvidia-docker-plugin的时间会下降。
+		以下为笔者猜测:
+			设计一个仅仅调用cudaGetDeviceCount的程序test_cost，然后在设置一个调用cudaGetDeviceCount后再进入无限循环的函数test_cost_loop。
+			如果一直运行的test_cost_loop, test_cost返回的速度会很快。如果关闭test_cost_loop, test_cost会非常慢。说明如果有一个访问cuda环境的后台程序，会增快访问速度。但该猜测没有在官方手册中证实。
+			
+附录A "nvidia-modprobe -u -c=0"分析 
+nvidia-modprobe源码维护于github, https://github.com/NVIDIA/nvidia-modprobe
+-u 参数是加载Unified Memory kernel module模块。大意是将GPU和CPU用统一内存，不再来回拷贝。详见: https://devblogs.nvidia.com/parallelforall/unified-memory-in-cuda-6/
+-c=0 表示次设备号。如果没有对应的设备文件，会mknode一个设备文件。
+如果设置了-u会使用nvidia_uvm_modprobe，否则调用c，待分析。
+如果加-u是加载nvidia%d。不加-u，会根据-c ${数字} 加载"nvidia%d"模块。
+
+
+附录B 环境变量说明
+(1) CUDA_VISIBLE_DEVICES
+可以设置环境变量CUDA_VISIBLE_DEVICES-2来屏蔽其他GPU，这样只有GPU2能被使用。当然也可以使用CUDA_VISIBLE_DEVICES-2,3来设置多个GPU，
+(2) CUDA_DISABLE_UNIFIED_MEMORY 
+为1的话，关闭UNIFIED_MEMORY。对于多GPU的情况，UNIFIED_MEMORY会有问题，需要关闭。
+(3) CUDA_CACHE_DISABLE
+关闭cache，待分析
