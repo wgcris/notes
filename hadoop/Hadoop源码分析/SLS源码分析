@@ -1,0 +1,100 @@
+1 命令如下:
+bin/slsrun.sh --input-rumen=./job-trace-11-01.json --output-dir=./tmp
+
+2 源码分析
+SLSRunner.main
+	...														// 配置
+	加入存在--nodes配置项
+	isSLS配置为true								// 没有配置inputsls，这里不适用sls格式
+	构造SLSRunner对象
+	sls.start
+		startRM
+			把yarn-site配置的调度器设置给yarn.sls.scheduler.class配置项，为了在ResourceSchedulerWrapper里构造真实的调度器
+			然后将调度器改为ResourceSchedulerWrapper
+		startNM
+			...
+			假如node节点为空的时候，parseNodesFromRumenTrace解析runmen中的map或reduce中的节点的值
+			假如node节点文件已经配置了，parseNodesFromNodeFile
+			遍历nodeSet
+				构造NMSimulator
+				nm.init									// hostname为具体nm的host。nmMemoryMB和nmVCores为配置的节点的内存和核大小。接下来的参数是[0,heartbeatInterval]的随机数。heartbeatInterval为心跳周期。最后为rm对象。
+				将节点加入到nmMap中
+				runner.schedule					// 吧当前的nm加入到runner中，为了方面后面统一启动
+				获取rack到rackSet中
+			得到rack和node的数目numRacks，numNMs
+		startAM
+			...
+			startAMFromRumenTraces
+				遍历inputTraces文件。		即--input-rumen制定的文件列表
+					规整jobStartTimeMS，jobFinishTimeMS。第一个启动的job的starttime被设置为0。所以，这里第一个job的starttime必须是最早的。
+					解析job下的所有map和reduce，解析成具体的container。这里用ContainerSimulator表示，containerLifeTime只记录了containerLifeTime，即container总共运行多久，而没有开始时间
+					构造AMSimulator，加入runner调度
+		waitForNodesRunning					// 等待所有节点处于running状态在执行后续操作
+		runner.start								// 启动服务
+		
+						
+3 重要组件
+3.1 TaskRunner
+其内部类Task完善了Runnable接口，Task实际的执行函数为每repeatInterval的时间执行一次middleStep操作。当然在第一次和最后一次有firstStep和lastStep
+
+3.2 NMSimulator
+NMSimulator继承自TaskRunner.Task，完善了middleStep函数
+NMSimulator.middleStep
+	更新runningContainers和completedContainerList
+	准备心跳信息，发送心跳给RM，并同RM中取出要清理的container执行清理操作
+	
+3.3 ContainerSimulator
+
+
+3.4 AMSimulator
+AMSimulator继承自TaskRunner.Task
+实际运行为其子类MRAMSimulator对象
+AMSimulator.firstStep
+	submitApp
+	registerAM
+	trackApp
+AMSimulator.middleStep
+	processResponseQueue
+	sendContainerRequest
+	checkStop
+	
+AMSimulator.lastStep
+	...
+	finishApplicationMaster
+	
+	
+	
+4 参数的意义
+4.1 scheduler.allocate.timecost
+SLS参数的记录使用的是MetricRegistry
+ResourceSchedulerWrapper为FairScheduler的一个容器。
+ResourceSchedulerWrapper.allocate实质是调用了FairScheduler.allocate，只是在FairScheduler.allocate外面增加了记录该调用事件的操作。
+页面上"scheduler.allocate.timecost"就是FairScheduler.allocate调用消耗时间的记录
+
+4.2 scheduler.handle-*
+ResourceSchedulerWrapper.handle实质是调用了FairScheduler.handle，只是在FairScheduler.handle外面增加了记录该调用事件的操作。
+页面上"scheduler.handle-"就是处理FairScheduler.handle出题某个时间分支所消耗的时间
+
+5 使用
+
+5.1 制作rumen文件
+操作机器： 172.19.151.30
+nohup hadoop jar  /software/servers/hadoop-2.7.1/share/hadoop/tools/lib/hadoop-rumen-2.7.1.jar   org.apache.hadoop.tools.rumen.TraceBuilder -recursive file:///home/yarn/job-trace.json file:///home/yarn/job-topology.json hdfs:///userlogs/history/done/2017/03/01/ &
+
+5.2
+./bin/slsrun.sh  --input-rumen=/home/wuyiran/hadoop-2.7.1/share/hadoop/tools/sls/sample-data/2jobs2min-rumen-jh.json --output-dir=. --print-simulation
+
+
+
+
+6 TraceBuilder分析
+6.1 使用方法
+hadoop jar  ./hadoop-rumen-2.7.1.jar   org.apache.hadoop.tools.rumen.TraceBuilder -recursive file://~/job-trace.json file:///~/job-topology.json hdfs:///userlogs/history/done/2016/10/19/000020
+6.2 源码分析
+TraceBuilder.run
+	构造MyOptions对象					
+		设置doRecursiveTraversal为true
+		设置traceOutput和topologyOutput	
+		设置input，会将指定的hdfs目录下面所有的数据拷出来
+	遍历inputs
+		

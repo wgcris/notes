@@ -1,0 +1,44 @@
+HistoryServer.main
+	...
+	构造HistoryServer对象
+		initialize
+			attachPage(new HistoryPage(this))									// HistoryPage默认的prefix为"",继承于WebUIPage
+				得到pagePath，这里为"/"
+				renderHandler=createServletHandler							//使用pagePath的路径构造ServletContextHandler对象
+				renderJsonHandler=createServletHandler					//使用pagePath+"/json"的路径构造ServletContextHandler对象
+				attachHandler(renderHandler)										//将handler注册到handlers和serverInfo
+    		attachHandler(renderJsonHandler)
+    		增加page和handlers的映射关系到pageToHandlers
+			attachHandler(ApiRootResource.getServletHandler(this))					//设置api页面的handler，不知道为何不能访问
+    	attachHandler(createStaticHandler(SparkUI.STATIC_RESOURCE_DIR, "/static"))			// 设置static页面的handler
+			构造ServletContextHandler对象contextHandler
+			设置contextHandler的路径为/history。
+			设置servlet为loaderServlet，获取request的路径。根据路径加载调用loadAppUi加载页面，设置response返回。
+			attachHandler(contextHandler)
+	server.bind
+		WebUI.bind
+			startJettyServer
+				...
+
+appCache对象
+	是一个ApplicationCache对象
+
+							
+loadAppUi分析	
+loadAppUi			
+	appCache.get
+		lookupAndUpdate
+		
+		
+		ApplicationCache.appLoader.load
+		
+		
+FsHistoryProvider动态更新app		
+	initialize
+		startPolling
+			...
+			默认10s调用一次checkForLogs
+				checkForLogs
+					默认得到logDir目录下的所有文件信息。使用spark.history.fs.logDirectory的配置，默认值为file:/tmp/spark-events
+
+
