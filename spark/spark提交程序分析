@@ -339,6 +339,10 @@ executor启动的时候注册的时候会更更新driver端的executorDataMap
 (1) "spark.yarn.appMasterEnv.*" 可以传递给AM程序
 (2) 通过spark.executorEnv.*指定
 
+
+
+
+
 下面以一个WordCount有数据的实例进行分析
 提交命令:
 $SPARK_HOME/bin/spark-submit --class com.zcy.spark.MyWordCount --master yarn --deploy-mode client --executor-memory 4G --num-executors 2 --jars ./sparkTest.jar .sparkTest.jar /tmp/words
@@ -357,7 +361,7 @@ $SPARK_HOME/bin/spark-submit --class com.zcy.spark.MyWordCount --master yarn --d
 		(a)先分析FileSystem.getLocal(hadoopConfiguration)函数
 			FileSystem.getLocal(hadoopConfiguration)				// 为了加载hdfs-site.xml
 			broadcast																				// 把hadoop配置序列化后通过广播变量发布
-			设置函数setInputPathsFunc，输入JobConf，然后会调用FileInputFormat.setInputPaths
+			设置函数setInputPathsFunc，输入JobConf，然后会调用FileInputFormat.setInputPaths, 会设置给配置项"mapreduce.input.fileinputformat.inputdir"中
 			返回一个HadoopRDD对象					//sc为当前的SparkContext对象。broadcastedConf为广播的hadoop配置信息。initLocalJobConfFuncOpt为上面的转化函数setInputPathsFunc。inputFormatClass为TextInputFormat。keyClass为LongWritable。valueClass为Text。minPartitions为2。
 		(b)然后分析.map部分
 			HadoopRDD没有实现map方法，因此调用RDD.map
@@ -411,4 +415,12 @@ HadoopRDD	---> MapPartitionsRDD  --> MapPartitionsRDD  -->  MapPartitionsRDD  --
 <-----textFile------>  <-------flatMap------->  <-------map------->  <-------reduceByKey------->
 
 (5) count.saveAsTextFile
+ShuffledRDD并没有实现saveAsTextFile方法，实际调用父类 RDD.saveAsTextFile
+RDD.saveAsTextFile
+	this.mapPartitions			//传入一个函数
+		构造MapPartitionsRDD对象					//第一个参数为this。第二个参数为一个函数。第三个参数为preservesPartitioning为false
+	RDD.rddToPairRDDFunctions(r)(nullWritableClassTag, textClassTag, null).saveAsHadoopFile[TextOutputFormat[NullWritable, Text]](path)	
+		分两步分析
+		
+
 

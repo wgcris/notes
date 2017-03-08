@@ -385,9 +385,28 @@ main
 					containerNotAssigned
 						更新containersReleased，pendingRelease以及release							
 		更新已经完成map和reduce数目等参数
-		scheduleReduces					//判断是否需要执行reduce，调度reduce的操作，暂时略
-			... 		//待分析
-			
+		假如完成的task数目发生了变化
+			preemptReducesIfNeeded																//这里MapReduce-6032新添加的内容
+				reduceResourceRequest为空就直接退出										//与mapResourceRequest类似，reduceResourceRequest为addReduce的时候构造请求，通过一些列状态转换而跟新的
+				assignedRequests.map.size()>0				//表示仍有运行的map，立即返回
+				scheduledRequests.maps.size()<=0		//如果没有待分配的map就立即返回
+				//代码到这里表示没有运行的map但是请求却有map。可以认为这时候有pending的map，并且所有资源被reduce占满
+					preemptReducersForHangingMapRequests							//mapreduce.job.reducer.unconditional-preempt.delay.sec配置项reducerUnconditionalPreemptionDelayMs大于0才调用，默认为300。表示map超过指定时间的pending将无条件抢占reduce
+						getNumHangingRequests								//计算超时的map的数目
+						如果有超时的mapRequest，调用preemptReducer
+							preemptReducer											//传入的为超时hanging的map的个数
+								clearAllPendingReduceRequests			// 因为需要抢占，先把所有scheduledRequests.reduce放到pendingReduces。  注: 放到scheduledRequests.reduce表示待分配，放到pendingReduces表示等待不去分配。
+								计算preemptionReduceNumForOneMap		// 为ceil(maprequest/reducerequest)
+								计算preemptionReduceNumForPreemptionLimit				// 为ceil(maxReducePreemptionLimit*getResourceLimit()/reducerequest)
+								计算preemptionReduceNumForAllMaps				
+								toPreempt=Math.min(Math.max(preemptionReduceNumForOneMap,preemptionReduceNumForPreemptionLimit),preemptionReduceNumForAllMaps)			
+								assignedRequests.preemptReduce
+									在分配的reduce中按进度排序，将进度最低的几个移除，放入到
+					getAvailableResources							//获取可用资源，来自于RM的response请求preemptionWaitingReduces中，然后发送TaskAttemptKillEvent事件杀死对应的taskattempt
+					computeAvailableContainers				//加入请求资源小于headroom即可用资源，就返回。否则继续执行抢占reduce
+					preemptReducersForHangingMapRequests		//请战reduce,同上。只是传入的参数为reducerNoHeadroomPreemptionDelayMs，通过mapreduce.job.reducer.preempt.delay.sec配置，默认为0
+			scheduleReduces																				 //scheduledRequests指待RM分配container的taskattempt，assignedRequests值RM已经分配了container并返回给AM后的taskattempt
+				...			
 						
 根据startAllocatorThread进程的心跳服务heartbeat的分析，可知am的心跳从rm中获取分配的container之后，分给指定的map之后会发送TaskAttemptContainerAssignedEvent事件。所以，这里回到TaskAttemptStateInternal状态机继续分析。
 	处理TaskAttemptContainerAssignedEvent事件
@@ -627,14 +646,29 @@ RMCommunicator.scheduler完成了ApplicationMasterProtocol协议，是AM与RM通
 实际实现为ApplicationMasterProtocolPBClientImpl类
 
 
+
+5 Map和Reduce具体执行过程分析
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 附录A 配置的说明
 mapreduce.client.completion.pollinterval				表示客户端循环判断job是否完成的时间间隔
 mapreduce.job.reduces														设置reduce的数目
 mapreduce.job.reduce.slowstart.completedmaps
 
 默认的OutputFormat为TextOutputFormat
-
-
 FileOutputCommitter
 
 
@@ -707,10 +741,6 @@ The filesystem under path '/tmp/in/a.txt' is HEALTHY
 hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar wordcount -Dyarn.app.mapreduce.am.resource.cpu-vcores=10 /tmp/in /tmp/out
 
 
-
-
-
-
 附录B: terasort本地化请求信息记录
 生成初始材料:
 hadoop jar /software/servers/hadoop-2.7.1/share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar terasort /tmp/out2 /tmp/sort2
@@ -727,10 +757,64 @@ hdfs fsck /tmp/out2 -locations -blocks -files
 hadoop jar /software/servers/hadoop-2.7.1/share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar terasort /tmp/out2 /tmp/sort2
 
 
+附录C: hadoop jar分析
+hadoop jar 最终调用org.apache.hadoop.util.RunJar
+
+hadoop org.apache.hadoop.util.RunJar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.1.jar wordcount /tmp/in /tmp/out
+
+
+
+附录D: 关于MAPREDUCE-6302抢占的配置说明
+mapreduce.job.reducer.unconditional-preempt.delay.sec      单位为s，如果没有配置默认为300ms。表示无条件抢占reduce，如果有map的长达这个时间没有分配，就无条件抢占reduce
+mapreduce.job.reducer.preempt.delay.sec										 单位为s，默认为0。表示如果没有headroom的话，无条件抢占reduce的延时时间。
+
+
+参数配置:
+	<property>
+		<name>mapreduce.job.reduce.slowstart.completedmaps</name>
+		<value>0.7</value>
+	</property>
+	<property>
+		<name>yarn.app.mapreduce.am.job.reduce.rampup.limit</name>
+		<value>0.3</value>
+	</property>
+	<property>
+		<name>yarn.app.mapreduce.am.job.reduce.preemption.limit</name>
+		<value>0.5</value>
+	</property>
+	<property>
+		<name>mapreduce.job.reducer.preempt.delay.sec</name>
+		<value>0</value>
+		<description>The threshold (in seconds) after which an unsatisfied
+		  mapper request triggers reducer preemption when there is no anticipated
+		  headroom. If set to 0 or a negative value, the reducer is preempted as
+		  soon as lack of headroom is detected. Default is 0.
+		</description>
+	</property>
+	<property>
+		<name>mapreduce.job.reducer.unconditional-preempt.delay.sec</name>
+		<value>2</value>
+		<description>The threshold (in seconds) after which an unsatisfied
+		  mapper request triggers a forced reducer preemption irrespective of the
+		  anticipated headroom. By default, it is set to 5 mins. Setting it to 0
+		  leads to immediate reducer preemption. Setting to -1 disables this
+		  preemption altogether.
+		</description>
+	</property>
+
+                           
+                           
+mapreduce.job.reduce.slowstart.completedmaps：当map task完成的比例达到阈值后才会为reduce task申请资源，默认是0.05
+mapreduce.job.reducer.preempt.delay.sec：在没有资源时抢占的等待时间，默认是0. 如果是0或负值则直接开始抢占 。 原文：The threshold (in seconds) after which an unsatisfied   mapper request triggers reducer preemption when there is no anticipated
+      headroom. If set to 0 or a negative value, the reducer is preempted as   soon as lack of headroom is detected. Default is 0.
+mapreduce.job.reducer.unconditional-preempt.delay.sec： 如果在等待时间内Map没有获得资源，则进入强制抢占，默认是5分钟. 这里是指当有pending mappers但所有资源都给了Reduce时。原文：The threshold (in seconds) after which an unsatisfied
+      mapper request triggers a forced reducer preemption irrespective of the   anticipated headroom. By default, it is set to 5 mins. Setting it to 0   leads to immediate reducer preemption. Setting to -1 disables this   preemption altogether.
+yarn.app.mapreduce.am.job.reduce.rampup.limit： 在maptask完成之前，最多启动reduce task比例，默认是0.5  （50% 代码中配置）
+yarn.app.mapreduce.am.job.reduce.preemption.limit:  当map task需要资源但暂时无法获取资源（比如reduce task运行过程中，部分map task因结果丢失需重算）时，为了保证至少一个map task可以得到资源，最多可以抢占reduce task比例，默认是0.5 默认值是0.5 (50% 代码中配置 )
+
+
 
 
 问题:
-一个map对应的split有3个副本，会对应几个request
-
-
-
+一个map对应的split有3个副本，会对应几个request。
+答: 根据节点副本确定local级别请求，然后确定rack级别请求，再加上一个*级别请求。
