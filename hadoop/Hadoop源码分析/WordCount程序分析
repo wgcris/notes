@@ -496,6 +496,7 @@ YarnChild.main
 				...
 				sendDone
 					umbilical.done		远程调用TaskAttemptListenerImpl.done, 即发送TaskAttemptEvent(attemptID, TaskAttemptEventType.TA_DONE))
+
 reduce任务的分析
 YarnChild.main
 	//具体流程同map任务
@@ -598,12 +599,49 @@ JobEventType.JOB_COMMIT_COMPLETED
     	job.finished
     		更新metrics    
 				
-至此，一个MR程序的正常运行流程分析完成			
-4 组件和一些重要的函数的说明
-4.1 JobHistory说明
+至此，一个MR程序的正常运行流程分析完成
+
+4 Map和Reduce具体执行过程分析
+这里接着上文从map节点YarnChild启动开始分析
+
+YarnChild.main
+	一次获取传入参数，依次为host,port,attemptid,appid
+	构造jvmid，会根据attempt构造，另外值得注意的是这里根据attemptid的名字来判断该taks是map还是reduce
+	... metric,安全相关
+	构造TaskUmbilicalProtocol对象umbilical，为了与appmaster通信
+	umbilical.getTask							//这里使用rpc远程调用TaskAttemptListenerImpl.getTask
+		TaskAttemptListenerImpl.getTask会根据传入的jvmid来返回jvmtask,并跟新相应的列表
+	根据上一步返回的jvmtask获取实际的task
+	更新YarnChild的taskid
+	configureTask
+	taskFinal.run								//这里必然是MapTask.run
+		MapTask.run
+			配置进度条的信息
+			初始化reporter
+			initialize							//初始化配置信息
+			这里好像没有setup阶段，暂时不考虑cleanup阶段
+			runNewMapper
+				构造taskContext对象
+				
+				setMapperClass
+				...										//一些map具体的执行操作。暂时不分析。
+			done
+				...
+				假如需要提交最终结果，会执行umbilical.commitPending，远程调用TaskAttemptListenerImpl.commitPending, 即发送TaskAttemptEvent(attemptID,TaskAttemptEventType.TA_COMMIT_PENDING)事件
+				...
+				sendDone
+					umbilical.done		远程调用TaskAttemptListenerImpl.done, 即发送TaskAttemptEvent(attemptID, TaskAttemptEventType.TA_DONE))
+
+
+
+
+
+			
+5 组件和一些重要的函数的说明
+5.1 JobHistory说明
 使用类: org.apache.hadoop.mapreduce.v2.hs.JobHistoryServer
 
-4.2 ContainerAllocatorRouter组件说明
+5.2 ContainerAllocatorRouter组件说明
 		ContainerAllocatorRouter.serviceStart
 			这里暂时不考虑uber模式
 			构造RMContainerAllocator对象containerAllocator
@@ -623,7 +661,7 @@ JobEventType.JOB_COMMIT_COMPLETED
 			RMContainerAllocator.serviceStart
 				循环从eventQueue获取事件,为阻塞调用,当有事件到来,使用handleEvent处理。								//具体的事件处理稍后分析
 
-4.3 ApplicationMasterService.allocate的说明
+5.3 ApplicationMasterService.allocate的说明
 ApplicationMasterService.allocate
 	获取appattemptid和appid
 	为amLivelinessMonitor发ping响应存活信息
@@ -641,16 +679,9 @@ ApplicationMasterService.allocate
 	构造allocateResponse
 	配置nodereport,AllocatedContainers,CompletedContainersStatuses,AvailableResources,NumClusterNodes等信息
 	
-4.4 RMCommunicator.scheduler
+5.4 RMCommunicator.scheduler
 RMCommunicator.scheduler完成了ApplicationMasterProtocol协议，是AM与RM通信的主要协议。
 实际实现为ApplicationMasterProtocolPBClientImpl类
-
-
-
-5 Map和Reduce具体执行过程分析
-
-
-
 
 
 

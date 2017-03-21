@@ -1,11 +1,34 @@
-本文主要分析org.apache.hadoop.fs.FsShell的机制。
-以hdfs的rename为例子说明RPC的过程。
+以8030端口分析RPC，
 
-(1) 提交rename的方式
-hdfs dfs mv ${old_name} ${new_name}
-实际调用了org.apache.hadoop.fs.FsShell
+1. 服务端
+以ApplicationMasterService类使用RPC为例子进行分析，说明启动。
+rpc=YarnRPC.create
+	根据配置选择RPC的类，默认为HadoopYarnProtoRPC
+	实例化该类
+rpc.getServer
+	HadoopYarnProtoRPC.getServer
+		RpcFactoryProvider.getServerFactory.getServer
+			首先使用默认的工厂类构造工厂RpcServerFactoryPBImpl
+			RpcServerFactoryPBImpl.getServer
+				RpcServerFactoryPBImpl.createServer
+					构造Server对象			
+server.start
+	启动responder,listener,handlers
 
-
-
-
-
+2. 客户端
+以ApplicationMasterProtocol的allocate方法访问为例子
+rmClient=ClientRMProxy.createRMProxy
+	RMProxy.createRMProxy
+		createRetryPolicy
+			配置连接等待时间，重试间隔时间等一些规则
+		createRMFailoverProxyProvider
+			获得provider对象，默认使用ConfiguredRMFailoverProxyProvider
+			ConfiguredRMFailoverProxyProvider.init			//配置相关参数
+		RetryProxy.create			
+			构造Proxy对象，具体的实现类为,交由RetryInvocationHandler处理
+			RetryInvocationHandler						//具体见Java的动态代理机制
+			
+			
+rmClient.allocate
+	
+	
