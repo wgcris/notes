@@ -1,0 +1,45 @@
+GlobalScheduler是YARN-5139提出的新调度器模型
+
+YARN-5139的子ISSUE
+
+(1) YARN-5716					// 已合入trunk
+Add global scheduler interface definition and update CapacityScheduler to use it.
+增加了global scheduler的接口,并更新到容量调度器中
+
+
+以2107年4月17日的truck代码进行分析:
+
+从ResourceAllocationCommitter接口入手分析
+
+
+CapacityScheduler完善了ResourceAllocationCommitter接口
+
+CapacityScheduler.tryCommit			// 第一个参数为资源总量，第二个是ResourceCommitRequest
+	查看ContainersToAllocate，看是否有为确认但已经分配的container
+	
+	
+
+
+
+调度分析:
+心跳或连续调度进程触发为某个节点分配资源的操作，从这里开始分析
+allocateContainersToNode					//第一个参数为节点id，第二个参数记录来自于连续调度还是心跳
+	获取当前节点名
+	构造SimplePlacementSet对象ps
+	allocateContainersToNode				//第一个参数为仅仅存放该节点id的SimplePlacementSet，第二个为同前
+		根据传入的ps对象内node的个数判断调用allocateContainerOnSingleNode还是allocateContainersOnMultiNodes
+		allocateContainerOnSingleNode
+			事实上与原来的模式类似
+		allocateContainersOnMultiNodes
+			检查资源限制
+			allocateOrReserveNewContainers
+				调用assignContainers分配得到assignment
+				submitResourceCommitRequest
+				
+	假如分配到资源且为心跳触发调度模式
+		记录该节点offswitch的次数
+		canAllocateMore									// 判断条件为上次成功分配，且小于心跳次数，并没有预留
+			allocateContainersToNode			// 如果还可以分配的话，就继续分配
+			更新该节点offswitch的次数
+		当offswitch达到一定的次数之后，就返回
+

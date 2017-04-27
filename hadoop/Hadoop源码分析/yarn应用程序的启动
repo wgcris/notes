@@ -329,7 +329,7 @@ RMAppNewlySavingTransition.transition
 																rmApp.setQueue
 															检查权限
 															将RMAppImpl加入到已经调度的app列表applications中
-															queue.getMetrics().submitApp			//提交app，对分析队列算法应该很有用，暂时不分析?????
+															queue.getMetrics().submitApp			//提交app
 															向rmDispatcher发送RMAppEventType.APP_ACCEPTED事件									
 
 rmDispatcher处理RMAppEventType.APP_ACCEPTED			

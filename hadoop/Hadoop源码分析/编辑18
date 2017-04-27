@@ -1,0 +1,46 @@
+
+标签总量
+yarn.scheduler.capacity.root.accessible-node-labels.GPU.capacity
+
+队列可访问标签
+yarn.scheduler.capacity.root.engineering.accessible-node-labels
+
+队列的默认标签
+yarn.scheduler.capacity.root.marketing.default-node-label-expression
+
+队列可访问该标签的百分比
+yarn.scheduler.capacity.root.engineering.accessible-node-labels.GPU.capacity
+
+
+
+
+<labelTotalResources>
+	<labelType>GPU<labelType>
+	<totalResources>**mb,**vcores</totalResources>
+<\labelTotalResources>
+
+
+
+
+        <queue name="jd_test">
+            <minResources>10000mb,10vcores</minResources>
+            <maxResources>30000mb,30vcores</maxResources>
+            <maxRunningApps>10</maxRunningApps>
+            <weight>1.0</weight>
+            <schedulingMode>fair</schedulingMode>
+            <aclAdministerApps>*</aclAdministerApps>
+            <aclSubmitApps>*</aclSubmitApps>
+            <accessibleLabels>
+            	<label>
+            		<labelType>GPU</labelType>
+            		<labelResources>**mb,**vcores</labelResources>
+            	<label>
+            	<defautLabel><defautLabel>
+            </accessibleLabels>
+        </queue>
+	
+警告:
+(1) 如果检查所有队列的某个标签的配置资源量(labelResources)总和大于labelTotalResources,发警告
+(2) 
+
+

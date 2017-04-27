@@ -1,0 +1,134 @@
+NodeLabel的分析以执行的命令为着手点：
+
+1 NodeLabel构造分析
+1.1 NodeLabel的构造
+在NodeManager.java中构造RMNodeLabelsManager对象
+可以通过RMContextImpl.getNodeLabelManager入手分析
+
+2 yarn rmadmin -addToClusterNodeLabels "GPU, LMEM"
+2.1 客户端
+RMAdminCLI.addToClusterNodeLabels					//参数为"GPU, LMEM"
+	buildNodeLabelsSetFromStr					//返回一个包含GPU和LMEM的集合
+	然后是if分支，判断是否配置了-directlyAccessNodeLabelStore
+	如果配置了-directlyAccessNodeLabelStore，直接访问存储，而不是RM
+		getNodeLabelManagerInstance					//没有这样使用，暂时略
+	如果没有配置directlyAccessNodeLabelStore
+		createAdminProtocol
+		根据传入的参数构造AddToClusterNodeLabelsRequest
+		adminProtocol.addToClusterNodeLabels			//RPC调用服务端程序
+
+2.2 服务端
+用户刷命令会通过RPC调用AdminService.addToClusterNodeLabels
+AdminService.addToClusterNodeLabels
+	checkAccess				//检查访问权限
+	checkRMStatus			//检查RM是否为active。如果访问的是standby会抛异常
+	构造response
+	rmContext.getNodeLabelManager().addToCluserNodeLabels
+		normalizeLabels							//规范化label,主要去掉边上的空格
+		checkAndThrowLabelName			//检查名字是否规范
+		添加NodeLabel到labelCollections
+		发送StoreNewClusterNodeLabels事件		//会触发Dsipatcher触发store.storeNewClusterNodeLabels操作，将nodelable增加到存储中
+		
+3 yarn rmadmin -replaceLabelsOnNode "host1=GPU host2=LMEM"
+3.1 客户端
+RMAdminCLI.replaceLabelsOnNodes
+	buildNodeLabelsMapFromStr			//解析参数设置到map中
+	replaceLabelsOnNodes
+		如果指定-directlyAccessNodeLabelStore
+			getNodeLabelManagerInstance.replaceLabelsOnNode			//略
+		如果不指定-directlyAccessNodeLabelStore
+			createAdminProtocol
+			构造request
+			adminProtocol.replaceLabelsOnNode										//RPC调用服务
+			
+3.2 服务端
+AdminService.replaceLabelsOnNodes
+	checkAcls
+	checkRMStatus
+	构造response
+	rmContext.getNodeLabelManager.replaceLabelsOnNode
+		replaceLabelsOnNode
+			normalizeNodeIdToLabels
+			checkReplaceLabelsOnNode
+				遍历参数
+					如果为一个node指定两个label，则抛异常
+					然后检查新加的label是否在labelCollections中，若不在抛异常。			//labelCollections通过addToClusterNodeLabels加入
+			internalUpdateLabelsOnNodes
+				遍历参数
+					从nodeCollections获取host													// nodeCollection会在addNode方法的labelManager.activateNode设置
+					replaceNodeForLabels															// 替换node，主要是更新labelCollections
+					清除原来的labels，并增加新的label到host
+		updateResourceMappings
+	
+
+
+
+4 RMNodeLabelsManager主要变量分析
+4.1 nodeCollections
+是一个map，key为节点hostname，value为Host对象(Host表示一个主机节点，且内部Label和nms,分别表示主机节点的标签和具体的nodemanager，一个Host上实际不仅仅1个nm)
+4.1.1 增加节点
+nodeCollections会在addNode方法的labelManager.activateNode设置
+labelManager.activateNode
+
+4.2 labelCollections
+为一个map，key为label名，value为NodeLabel对象
+
+
+5 任务提交与NodeLabel
+CapacityScheduler.schedule						//后台进程调用(开启连续调度时候,否则通过心跳)
+	遍历及节点一次调用CapacityScheduler.allocateContainersToNode分配
+		allocateContainersToNode
+			...							//一些检查和预留的情况暂不分析
+			root.assignContainers						//第一参数是集群总资源，第二个为要分配的节点，第三个为NO_LABEL的资源总量。在父亲队列分配container。			//这里以root -> 父队列 -> 叶子队列 三层模型分析
+				构造CSAssignment
+				node.getLabels								//获取当前节点支持的label集合
+				SchedulerUtils.checkQueueAccessToNode		//第一个参数是当前队列可访问的accessibleLabels,第二个参数是该节点的nodeLabels			//在构造队列的时候会设置可访问的标签
+					假如队列可访问标签为*, 他可以访问任务节点
+					假如节点没有配置标签，这个节点可以被分配任何类型的资源。
+					假如队列可访问的标签中包含该节点的标签，可以访问。
+					其他的情况，均为不可访问。
+				进入一个while循环								//while的退出条件为canAssign为false。canAssign为false的时候为节点的剩下的可用资源不能满足最小资源要求。
+					canAssignToThisQueue				//加入超过了队列限制就退出
+					assignContainersToChildQueues
+						遍历子队列，依次进行分配
+					
+					
+6 FairScheduler标签设计
+6.1 队列的配置和解析
+6.2 分配的校验
+6.3 配置
+<queue name="jd_test">
+    <minResources>10000mb,10vcores</minResources>
+    <maxResources>30000mb,30vcores</maxResources>
+    <maxRunningApps>10</maxRunningApps>
+    <weight>1.0</weight>
+    <schedulingMode>fair</schedulingMode>
+    <aclAdministerApps>*</aclAdministerApps>
+    <aclSubmitApps>*</aclSubmitApps>
+    <accessibleLabels>GPU</accessibleLabels>
+		<defaultLabel>GPU<defaultLabel>
+</queue> 
+
+
+        <queue name="jd_test_c1">
+            <minResources>102760448 mb,28 vcores</minResources>
+            <maxResources>102760448 mb,28 vcores</maxResources>
+            <maxRunningApps>10</maxRunningApps>
+            <weight>1.0</weight>
+            <schedulingPolicy>fair</schedulingPolicy>
+            <aclAdministerApps>*</aclAdministerApps>
+            <aclSubmitApps>*</aclSubmitApps>
+				    <accessibleLabels>GPU</accessibleLabels>
+						<defaultLabel>GPU<defaultLabel>
+        </queue>
+        <queue name="jd_test_c1">
+            <minResources>102760448 mb,28 vcores</minResources>
+            <maxResources>102760448 mb,28 vcores</maxResources>
+            <maxRunningApps>10</maxRunningApps>
+            <weight>1.0</weight>
+            <schedulingPolicy>fair</schedulingPolicy>
+            <aclAdministerApps>*</aclAdministerApps>
+            <aclSubmitApps>*</aclSubmitApps>
+            <accessibleLabels>GPU</accessibleLabels>
+						<defaultLabel>GPU<defaultLabel>
+        </queue>

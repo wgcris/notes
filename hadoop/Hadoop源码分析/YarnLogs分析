@@ -1,0 +1,21 @@
+
+主要分析这个命令 yarn logs -applicationId ${id}
+
+1 代码分析
+main
+	构造YarnConfiguration,LogsCLI等
+	logDumper.run
+		解析参数
+		verifyApplicationState				//验证状态，如果是ACCEPTED及以后的状态才通过
+		如果没有指定containerId和节点地址
+			logCliHelper.dumpAllContainersLogs(appId, appOwner, System.out)
+				yarn.nodemanager.remote-app-log-dir
+		如果containerId和节点地址有且只有一个没有指定，打印错误
+		如果指定了containerId和节点地址
+			logCliHelper.dumpAContainersLogs(appIdStr, containerIdStr,nodeAddress, appOwner)		
+
+
+
+
+
+

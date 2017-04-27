@@ -1,6 +1,8 @@
 以8030端口分析RPC，
 
-1. 服务端
+1 服务端
+1.1 使用流程
+ApplicationMasterService.java
 以ApplicationMasterService类使用RPC为例子进行分析，说明启动。
 rpc=YarnRPC.create
 	根据配置选择RPC的类，默认为HadoopYarnProtoRPC
@@ -15,7 +17,62 @@ rpc.getServer
 server.start
 	启动responder,listener,handlers
 
-2. 客户端
+1.2 server服务组件分析
+分析listener,handlers,responder三个服务组件
+1.2.1 Listener
+(1) 构造方法
+	构造acceptChannel,配置为非阻塞模式，绑定主机端口				// 用于接受连接请求。配置为非阻塞模式，accept() 方法会立刻返回，如果还没有新进来的连接,返回的将是null。 
+	构造selector																	
+	构造reader																				// 内部构造了pendingConnections和readSelector
+	启动reader
+		reader.run
+			doRunLoop
+				处理pendingConnections，将其注册到readSelector
+				readSelector.select
+				然后从readSelector中读取得到的消息，这里实质上是accept之后client端发来的消息
+				遍历消息，执行doRead
+					doRead
+						设置上次同时时间，主要为了关闭空闲连接
+						c.readAndProcess
+							...																		//解析
+							processOneRpc
+								获取Protobuf的格式信息
+								processRpcRequest
+									构造rpcRequest，Call
+									callQueue.put											// 写入callqueue														
+	acceptChannel.register														// 注册。将acceptChannel与selector联系在一起。使用select必须为非阻塞模式。
+
+(2) run
+	配置了线程变量SERVER
+	connectionManager.startIdleScan
+		scheduleIdleScanTask			// 循环执行下面代码
+			closeIdle								// 关闭处于长期处于idle状态的连接
+	进入循环
+		getSelector().select			// 非阻塞模式，使用select接受socket
+		遍历发来的消息，如果发来的消息有效执行doAccept
+			doAccept								// 用于处理客户端的连接请求。
+				获取连接channel，并向connectionManager注册
+				reader.addConnection		//供前面分析的reader使用，执行具体数据
+					将连接写入pendingConnections
+					readSelector.wakeup
+
+1.2.2 handlers线程
+(1) run
+	配置了线程变量SERVER
+	配置字节输出流buf
+	进入循环
+		callQueue.take													//从callQueue拿Call对象
+		记录CurCall，为线程级别变量
+		call
+			getRpcInvoker(rpcKind).call				//执行具体的调用
+			
+
+
+
+
+2 客户端
+2.1 使用流程
+AMRMClientImpl.java
 以ApplicationMasterProtocol的allocate方法访问为例子
 rmClient=ClientRMProxy.createRMProxy
 	RMProxy.createRMProxy
@@ -28,7 +85,10 @@ rmClient=ClientRMProxy.createRMProxy
 			构造Proxy对象，具体的实现类为,交由RetryInvocationHandler处理
 			RetryInvocationHandler						//具体见Java的动态代理机制
 			
-			
 rmClient.allocate
+	
+	
+	
+	
 	
 	

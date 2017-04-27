@@ -1,0 +1,11 @@
+
+
+条件1 遍历到ROOT队列，如果有一个操作了超过了任务限制最大限制。
+条件2 遍历到ROOT队列，如果有一个操作了超过了最大资源限制。				（要求内存和核心数有一个超过最大资源就认为操作限制）
+条件3 队列的pending大于2000，但是队列资源的使用量没有达到最小资源限制(检查条件要求内存和核心数同时小于最小资源量)。
+
+if( 条件2 is true) {
+	realPendingContainers = -1
+} else if (条件 3 成立) {
+	readPendingContainers = pendingcontainers
+}
