@@ -1,0 +1,18 @@
+1 FSEditLog
+ 
+ 
+initJournalsForWrite
+initSharedJournalsForRead
+openForWrite
+endCurrentLogSegment
+close 
+ 
+ 
+EditLogOutputStream
+	JournalSetOutputStream
+	EditLogFileOutputStream
+	 
+EditLogInputStream
+	beginTransaction
+	endTransaction
+	logSync

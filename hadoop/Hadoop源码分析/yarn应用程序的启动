@@ -313,8 +313,8 @@ RMAppNewlySavingTransition.transition
 						再次触发RM的事件处理器rmDispatcher，由于发送的事件类型为RMAppEventType,所以使用ApplicationEventDispatcher处理。
 						ApplicationEventDispatcher.handle
 							rmApp.handle
-								再次调用给有限状态机发送时间。RMAppEventType.APP_NEW_SAVED会使RMAppImpl从状态NEW_SAVING转化为SUBMITTED，通过AddApplicationToSchedulerTransition处理。(注: APP_NEW_SAVED这是RM重启引入的状态，Yarn那本书没有)
-									AddApplicationToSchedulerTransition.handle				//处理AppAddedSchedulerEvent时间
+								再次调用给有限状态机发送时间。RMAppEventType.APP_NEW_SAVED会使RMAppImpl从状态NEW_SAVING转化为SUBMITTED，通过AddApplicationToSchedulerTransition处理。
+									AddApplicationToSchedulerTransition.handle				//处理AppAddedSchedulerEvent事件
 										会向RM	的rmDispatcher发送SchedulerEventType类型的事件，由schedulerDispatcher处理(一个服务，用于资源调度)。							
 										SchedulerEventDispatcher.handle
 											将	SchedulerEventType.APP_ADDED放入队列，在run函数中待处理，最后会调用scheduler.handle(使用fair调度器)									

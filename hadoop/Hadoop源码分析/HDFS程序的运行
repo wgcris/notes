@@ -1,4 +1,213 @@
-1 hdfs dfs -ls /test
+1 hdfs程序的说明
+1.1 hdfs程序代码
+下面是一个典型的hdfs程序:
+    Configuration conf = new HdfsConfiguration();
+    FileSystem fs = FileSystem.get(conf);
+
+    System.out.println(fs.getClass().getCanonicalName());
+
+    // 1. 创建文件
+    FSDataOutputStream out  = fs.create(new Path("/mytext"));
+
+    // 2. 写文件
+    out.write("hello hdfs".getBytes(),0,"hello hdfs".length());
+    out.close();
+
+    // 3. 读文件
+    FSDataInputStream in = fs.open( new Path("/mytext") );
+    IOUtils.copyBytes(in, System.out,50,false);
+
+    // 4. 删除文件
+    //fileSystem.delete(new Path("/mytext"));
+
+1.2 程序分析
+FileSystem.get					//DistributedFileSystem 返回DistributedFileSystem对象
+	FileSystem.get				//第一个参数为getDefaultUri返回值，为fs.defaultFS对应的值。这里为hdfs://ns1。第二个参数为conf
+fs.create
+	DistributedFileSystem.create
+		dfs.create
+			DFSClient.create
+				checkOpen								// 检查客户端是否断开，即有没有调用close
+				permission.applyUMask		// 引用umask权限
+				DFSOutputStream.newStreamForCreate				//
+					dfsClient.namenode.create								//通过ClientProtocol协议向namenode调用create方法，返回文件状态
+					返回一个DFSOutputStream对象
+				beginFileLease					// 第一个参数为文件id，在nn端返回的state中。第二个参数为DFSOutputStream
+					getLeaseRenewer().put(inodeId, out, this)						
+		dfs.createWrappedOutputStream									//加密使用，暂不考虑
+
+/*----- nn端分析 -----*/
+nn端rpc调用处理create方法，通过NameNodeRpcServer响应的
+NameNodeRpcServer.create
+	namesystem.startFile
+		startFileInt
+			blockManager.verifyReplication							// 检查副本数设置是否在范围内
+			构造FSPermissionChecker对象
+			checkOperation(OperationCategory.WRITE)			// 查看是否可执行写操作。对standby会抛异常。
+			如果是预留的路径(义/.reserved/开头)，就解析它的路径到String数组pathComponents中
+			waitForLoadingFSImage												// 等待fsimage被加载完
+			... 												// 加密相关，根据provider配置，暂不分析
+			checkClient									// 检查白名单，黑名单信息
+			checkOperation							// 同前
+			dir.resolvePath
+			checkNameNodeSafeMode
+			dir.resolvePath							// 主要解析预留的文件路径名
+			dir.getINodesInPath4Write
+				INode.getPathComponents		// 将路径名解析为二维byte数据。第一位为各级目录项，第二级别为各级目录字符串对应的byte[]
+				INodesInPath.resolve			// 返回INodesInPath信息，会包括这个路径的所有inode
+			startFileInternal
+				iip.getLastINode					// 获取最后的inode，即要create的inode
+				iip.getPath								// 获取文件的全路径名称
+				INodeFile.valueOf					// 得到要创建的这个目录对应的INodeFile对象
+				检查是否有写权限
+				不考虑加密的情况
+				加入允许覆盖
+					FSDirDeleteOp.delete
+					加入原来存在文件
+						INodesInPath.replace										//从InodesPath中移除
+						FSDirDeleteOp.incrDeletedFileCount
+						removeLeasesAndINodes										//移除租约和inodes
+				FSDirMkdirOp.createAncestorDirectories			//创建父目录
+				leaseManager.addLease												//增加租约
+				getEditLog().logOpenFile										//记录editlog
+			FSDirStatAndListingOp.getFileInfo		//获取文件信息用于打印日志				
+/*-------------------*/	
+
+out.write																	// DFSOutputStream.write
+	FSOutputSummer.write										// FSOutputSummer.write
+		FSOutputSummer.write1
+			假如本地buffer为0，且写入的字节数大于本地buffer长度，直接写入流中
+				writeChecksumChunks								// 写入长度为缓冲区的长度
+					sum.calculateChunkedSums
+					然后循环按照校验数的大小调用writeChunk执行写块
+						DFSOutputStream.writeChunk
+							writeChunkImpl
+								currentPacket=createPacket							// 如果currentPacket为null，构造它，为DFSPacket类型
+								currentPacket.writeChecksum							// 写校验数
+								currentPacket.writeData									// 写数据
+								currentPacket.incNumChunks							// numChunks数目
+							当packet已经满了
+								waitAndQueueCurrentPacket
+									当dataQueue和ackQueue已经满了，调用dataQueue.wait等待。
+									queueCurrentPacket										// 将packet如队列									
+								* 这里暂时不考虑append的情况 *
+								computePacketChunkSize
+								假如发送完毕，调用waitAndQueueCurrentPacket发送空的packet				// blockSize是通过构造DFSOutputStream得到, 源自于create返回的state
+			否则，按照缓冲区剩余的字节数目截取部分字节调用flushBuffer写入
+				flushBuffer												//设置也是调用writeChecksumChunks
+
+
+//可以清楚主线程只是想缓冲区不断地写入DFSPacket。DataStreamer拿出这些数据负责写块，具体的分块的流程是DataStreamer执行的。
+
+/*----- client端DFSOutputStream处理dataQueue信息 -----*/
+之前介绍的是write方法最终会向DFSOutputStream的dataQueue发送DFSPacket，这里说明DataStreamer后台处理dataQueue
+DataStreamer.run
+	从dataQueue取出DataStreamer，如果拿不到数据就发送心跳包。			// 这个过程是
+	初始stage为PIPELINE_SETUP_CREATE状态
+		nextBlockOutputStream									
+			locateFollowingBlock
+				dfsClient.namenode.addBlock												// rpc调用nn端返回一个要写入的块
+			createBlockOutputStream															// 传入要写入块的dn信息。目的是连接第一个DN。实际并没有写数据，因为数据存储于one变量中。
+				进入循环
+					createSocketForPipeline													// 使用块的第一副本的地址创建socket
+					dfsClient.getDatanodeWriteTimeout								// 获取超时时间，dfs.datanode.socket.write.timeout + 5*numDN
+					然后配置输入输出流
+					构造DataOutputStream对象
+					构造一个新的ExtendedBlock对象blockCopy, 并重新设置大小
+					getPinnings																			// 得到一个数据，分别表示该block对应的三个副本所在的dn节点是否为favoredNodes
+					Sender.writeBlock																// 设置sender实现了DataTransferProtocol接口，因此用于DN通信。					// writeBlock做了什么?
+						构造数据
+						send																					// 构造protobuf数据包，并发送数据
+					从blockReplyStream流中得到响应数据
+					判断访问节点是否被重启，如果重启，抛异常
+					根据返回的firstBadLink判断是否写入异常
+			如果createBlockOutputStream没有写入成功
+				dfsClient.namenode.abandonBlock										// 同时nn加入块
+				将错的excludedNodes加入块					
+		setPipeline							// 设置nodes,storageTypes,storageIDs。这些变量为要处理的当前快对应的值。
+		initDataStreaming
+			构造ResponseProcessor对象，并开启该服务
+			设置状态为DATA_STREAMING
+	假如是最后一条DFPacket，就等待一会，等待相应的到来，并置状态为PIPELINE_CLOSE
+	如果当前处理的DFPacket的不是心跳包
+		dataQueue.removeFirst						// 从dataQueue移除
+		ackQueue.addLast								// 将DFPacket包移入ackQueue
+	one.writeTo(blockStream)					// 写数据包
+	blockStream.flush()
+	假如是最后一个DFPacket
+		endBlock												// 结束该block对应的responder,pipeline等
+	closeInternal												// 所有都结束后清理
+
+	/*---------------dn端处理client发来的消息-----------*/
+	dn端的DataXceiverServer当收到一个客户端连接请求的时候，会构造一个DataXceiver来处理消息。
+	DataXceiver.writeBlock
+		拷贝一份originalBlock						// 因为pipeline的下游节点需要这些信息。而当前可能会修改block信息，所以做一个拷贝。
+		构造replyOut对象，是与pipeline上游datanode和client通信的流
+		checkAccess										// 检查权限
+		构造一个BlockReceiver对象				// 用来接收上游节点数据，并保存到当前本地文件系统，在发送给下游节点
+		构造下游的节点mirrorTarget和mirrorSock
+		然后连接下游节点，构造与下游节点通信的输入输出流mirrorOut和mirrorIn
+		Sender(mirrorOut).writeBlock				//向下游的流进行写writeBlock
+		mirrorOut.flush
+		假如上游节点是client
+			解析下游节点的mirrorInStatus和firstBadLink
+		假如上游节点是client
+			构造BlockOpResponse对象，并给client发响应
+		blockReceiver.receiveBlock
+			构造一个PacketResponder后台进程
+			循环执行一下操作直到最后一个packet到来
+				receivePacket
+					packetReceiver.receiveNextPacket						// 从上游输入流中读出Packet信息
+					获取读到的Packet的header
+					解析header获得字节在当前块中的移位(offsetInBlock),seqno,是否是最后一个packet,长度,是否立即同步块
+					不断地更新block中的offset
+					PacketResponder.enqueue											// 将请求加入到ackQueue
+					packetReceiver.mirrorPacketTo								// 向下游写数据
+					mirrorOut.flush
+					如果这里是最后一个packet(即空packet)，就立即调用flushOrSync同步数据
+					对于正常的packet
+						进行一些校验操作
+						out.write							// 写入文件
+						然后写校验数，更新replicaInfo信息，更新metrics，管理os缓冲等								
+		writeResponse									// 给上游节点写入SUCCESS作为响应。这里应该是通知上游节点，已经向下游节点发送数据
+		假如是DataNode节点
+			datanode.closeBlock
+		记录统计参数
+	/*------------------------------------------------*/
+			
+/*--------------------------------------------------*/	
+
+out.close
+	DFSOutputStream.closeImpl
+		flushBuffer
+		waitAndQueueCurrentPacket
+		flushInternal
+		closeThreads
+		completeFile
+			dfsClient.namenode.complete						// 调用nn端的namesystem.completeFile
+		dfsClient.endFileLease				
+
+fs.open
+	DistributedFileSystem.open
+		DFSClient.open													// 返回DFSInputStream对象
+			构造DFSInputStream对象
+				设置dfsClient,verifyChecksum,src
+				设置cachingStrategy，即策略，来自于DFSClient的策略。策略为CachingStrategy。参数包括dropBehind和readahead,分别有dfs.client.cache.drop.behind.reads(默认false)和dfs.client.cache.drop.behind.reads(默认0)设置
+				openInfo
+					fetchLocatedBlocksAndGetLastBlockLength
+						dfsClient.getLocatedBlocks			// 调用nn的getBlockLocations方法返回LocatedBlocks对象。这里返回的值包括指定文件的块信息等。
+						这里为构造函数触发的操作，locatedBlocks必为null
+						更新locatedBlocks为getLocatedBlocks的返回值，即文件对应的块信息等。
+						假如最后一个块还没有完成
+							
+		
+IOUtils.copyBytes														// 实质就是从DistributedFileSystem中read出来，然后写入输出。这里仅仅关注read
+	DFSInputStream.read
+		DFSInputStream.pread									
+			
+
+2 hdfs命令的说明
+2.1 hdfs dfs -ls /test
 调试方法: export HADOOP_ROOT_LOGGER=DEBUG,console
 hdfs dfs -ls /test
 根据脚本选择"dfs"会调用类org.apache.hadoop.fs.FsShell，参数为"dfs" "-ls" "/test"
@@ -79,7 +288,7 @@ NameNodeRpcServer.getListing
 		FSDirStatAndListingOp.getListingInt		
 			...									//待看
 
-2 hdfs dfs -get /tmp/a
+2.2 hdfs dfs -get /tmp/a
 简化前面的分析，可以从FsShell.run开始分析
 	FsShell.run					//参数为"-get" "/tmp/a"
 		构造一个Command对象instance，实际是org.apache.hadoop.fs.shell.Get类			//注: Get => CommandWithDestination => Command 父类的调用规则
@@ -123,16 +332,28 @@ NameNodeRpcServer.getListing
 				                    
 
 
-3 hdfs dfs -put a /tmp/
 
-
-4 关于FSNamesystem对象的说明与构造
-4.1 FSNamesystem的主要组件
+3 关于FSNamesystem对象的说明与构造
+3.1 FSNamesystem的主要组件
 (1) FSDirectory对象dir
 	用于表示目录。
 
-4.2 FSNamesystem对象的构造
+3.2 FSNamesystem对象的构造
 	见"NameNode启动"
 	
+
+4 常用类说明
+4.1 FileSystemLinkResolver
+主要是用于处理链接文件的情况。如果是连接文件会抛异常，解析后再操作。
+
+4.2 DFSOutputStream
+
+
+
+
+Hedged Reads  用于解决慢节点DN
+dfs.datanode.fsdataset.volume.choosing.policy				解决磁盘不均衡问题
+
+
 
 

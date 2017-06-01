@@ -1,0 +1,33 @@
+jobhistory分析
+
+JobHistory启动的主类: org.apache.hadoop.mapreduce.v2.hs.JobHistoryServer
+
+JobHistoryServer.main
+	launchJobHistoryServer
+		jobHistoryServer.init
+			jobHistoryServer.serviceInit
+				构造jobHistoryService对象，并赋值给historyContext
+				createStateStore										// 没有开启恢复
+				createJHSSecretManager					
+				构造AggregatedLogDeletionService
+				构造HSAdminServer
+				将下列服务注册
+					stateStore,HistoryServerSecretManagerService,jobHistoryService,clientService,aggLogDelService,hsAdminServer
+				super.serviceInit			// 会初始化刚刚注册的服务
+					stateStore.serviceInit															// 未开启，略
+					HistoryServerSecretManagerService.serviceInit				// 略
+					jobHistoryService.serviceInit
+						根据mapreduce.jobhistory.move.interval-ms获取moveThreadInterval，默认为3分钟
+						createHistoryFileManager							//构造HistoryFileManager
+						createHistoryStorage
+
+		jobHistoryServer.start
+			jobHistoryServer.serviceStart
+				super.serviceStart		会将serviceInit中注册的服务依次开启
+					stateStore					// 未开启，略
+					HistoryServerSecretManagerService				// 略
+					jobHistoryService
+						
+					
+
+
