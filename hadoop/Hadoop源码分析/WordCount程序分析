@@ -109,7 +109,8 @@ WordCount::main
 									根据splitsize构造split，并添加到splits中。
 								设置配置项mapreduce.lib.input.FileInputFormat.numinputfiles，为文件数
 							然后重新排序为数组array
-							createSplitFiles				//写一些元数据的信息
+							createSplitFiles				//写一些元数据的信息,写到hdfs目录下。譬如： hdfs://ns1/userlogs/bdp_ops/.staging/job_1500434517719_0205/
+																																						// 该目录下有job.jar，job.split，job.splitmetainfo，job.xml文件
 					设置mapreduce.job.maps的值，为writeSplits计算得到的map数目
 					获取mapreduce.job.queuename为队列名
 					获取acl，YARNRunner默认为*,暂时忽略
@@ -471,7 +472,7 @@ java org.apache.hadoop.mapred.YarnChild 172.16.177.127 46698 attempt_14785056038
 map任务的分析
 YarnChild.main
 	一次获取传入参数，依次为host,port,attemptid,appid
-	构造jvmid，会根据attempt构造，另外值得注意的是这里根据attemptid的名字来判断该taks是map还是reduce
+	构造jvmid，会根据attempt构造，另外值得注意的是这里根据attemptid的名字来判断该task是map还是reduce
 	... metric,安全相关
 	构造TaskUmbilicalProtocol对象umbilical，为了与appmaster通信
 	umbilical.getTask							//这里使用rpc远程调用TaskAttemptListenerImpl.getTask
@@ -622,8 +623,30 @@ YarnChild.main
 			这里好像没有setup阶段，暂时不考虑cleanup阶段
 			runNewMapper
 				构造taskContext对象
-				
-				setMapperClass
+				构造用于传入的map对象mapper
+				构造传入的InputFormat对象inputFormat,根据前面介绍为TextInputFormat类型
+				getSplitDetails				// 会在AM中就设置好TaskSplitIndex，这里有要处理文件的位置和在文件中的offset信息
+					从hdfs中得到对应的分片数据，然后
+				构造RecordReader对象input				//内容包括之前的分片信息，输入格式，reporter等
+				设置参数是否跳过record阶段
+				然后根据是否存在reduce构造output
+					如果构造没有reduce的话，就使用NewDirectOutputCollector对象。否则使用NewOutputCollector
+				然后改造MapContextImpl，里面包括所有之前构造的一些对象。
+				然后再构造mapperContext，这个最后要传入给用户
+				input.initialize				//	主要是初始化offset等信息
+				mapper.run
+					Mapper.run
+						Mapper.setup				// 未重载
+							循环调用context.nextKeyValue					// mapContext.nextKeyValue  发现最后为LineRecordReader.nextKeyValue。可以看出这里按照行返回key和value。其中key为在文件中的第多少个字符，value为一行字符串。
+								WordCount.map
+									这里是讲一行按单词分割，然后调用context.write将单词写入
+										context.write
+											mapContext.write
+												NewOutputCollector.write
+													collector.collect				// createSortingCollector方法返回collector，具体为MapOutputBuffer.collect
+														具体是进行合并等操作，最后将数据写入到磁盘中
+						Mapper.cleanup			// 未重载
+
 				...										//一些map具体的执行操作。暂时不分析。
 			done
 				...
@@ -632,10 +655,47 @@ YarnChild.main
 				sendDone
 					umbilical.done		远程调用TaskAttemptListenerImpl.done, 即发送TaskAttemptEvent(attemptID, TaskAttemptEventType.TA_DONE))
 
-
-
-
-
+这里介绍reduce的流程
+ReduceTask.run
+	首先设置progress的几个阶段，然后设置reporter
+	initialize
+		设置context
+		更新task状态
+		设置输出路径，committer等
+	构造CombineOutputCollector对象
+	构造shuffleConsumerPlugin对象,shuffleContext
+	shuffleConsumerPlugin.init					// 初始化shuffle相关组件
+	shuffleConsumerPlugin.run						// 启动shuffle				这里会返回RawKeyValueIterator对象。待shuffle/copy全部完成大的时候，会完成最后的merger，然后返回一个MergeQueue对象，用于后续索引数据
+		eventFetcher.start
+			umbilical.getMapCompletionEvents			// 从AM端拿到map完成相关事件
+			返回SUCCEEDED的map的个数
+		从配置项mapreduce.reduce.shuffle.parallelcopies获得numFetchers
+		根据numFetchers启动Fetcher线程
+		while scheduler.waitUntilDone					//循环等待shuffle完成同时更新状态		
+		然后释放shuffle/copy资源
+		状态置为SORT
+		merger.close													// 然后完成最后的merge和sort，返回kvIter，用于为reduce访问这些被合并的中间数据
+	设置当前状态为REDUCE状态
+	然后获得输出类型的key与value的具体类型
+	job.getOutputValueGroupingComparator
+		...
+		WritableComparator.get(key对应的类)    // 由于输出key为Text类，所有Comparator也就Text的
+	runNewReducer
+		构造rIter，用于遍历merge和sort的数据
+		构造taskContext
+		构造reducer
+		构造NewTrackingRecordWriter
+		reducer.run
+			setup			// do nothing
+			while			// 不断的遍历这个Iterator
+				reduce
+					IntSumReducer.reduce
+						统计字数
+						context.write
+							ReduceContextImpl.write
+								NewTrackingRecordWriter.write				// 这里默认使用的是TextOutputFormat
+								将文件写入hdfs中
+			cleanup		// do nothing			
 			
 5 组件和一些重要的函数的说明
 5.1 JobHistory说明
@@ -683,17 +743,6 @@ ApplicationMasterService.allocate
 RMCommunicator.scheduler完成了ApplicationMasterProtocol协议，是AM与RM通信的主要协议。
 实际实现为ApplicationMasterProtocolPBClientImpl类
 
-
-
-
-
-
-
-
-
-
-
-
 附录A 配置的说明
 mapreduce.client.completion.pollinterval				表示客户端循环判断job是否完成的时间间隔
 mapreduce.job.reduces														设置reduce的数目
@@ -701,10 +750,6 @@ mapreduce.job.reduce.slowstart.completedmaps
 
 默认的OutputFormat为TextOutputFormat
 FileOutputCommitter
-
-
-
-
 
 
 附录A:
@@ -832,8 +877,6 @@ mapreduce.job.reducer.preempt.delay.sec										 单位为s，默认为0。表�
 		  preemption altogether.
 		</description>
 	</property>
-
-                           
                            
 mapreduce.job.reduce.slowstart.completedmaps：当map task完成的比例达到阈值后才会为reduce task申请资源，默认是0.05
 mapreduce.job.reducer.preempt.delay.sec：在没有资源时抢占的等待时间，默认是0. 如果是0或负值则直接开始抢占 。 原文：The threshold (in seconds) after which an unsatisfied   mapper request triggers reducer preemption when there is no anticipated
@@ -843,9 +886,8 @@ mapreduce.job.reducer.unconditional-preempt.delay.sec： 如果在等待时间�
 yarn.app.mapreduce.am.job.reduce.rampup.limit： 在maptask完成之前，最多启动reduce task比例，默认是0.5  （50% 代码中配置）
 yarn.app.mapreduce.am.job.reduce.preemption.limit:  当map task需要资源但暂时无法获取资源（比如reduce task运行过程中，部分map task因结果丢失需重算）时，为了保证至少一个map task可以得到资源，最多可以抢占reduce task比例，默认是0.5 默认值是0.5 (50% 代码中配置 )
 
-
-
-
 问题:
 一个map对应的split有3个副本，会对应几个request。
 答: 根据节点副本确定local级别请求，然后确定rack级别请求，再加上一个*级别请求。
+
+

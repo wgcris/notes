@@ -1,0 +1,54 @@
+
+
+启动nm的时候
+NodeManager.serviceInit
+	initAndStartRecoveryStore
+		使能NM恢复的话
+			得到本地文件系统的镜像recoveryFs
+			从配置项中yarn.nodemanager.recovery.dir得到nm恢复的存储根目录，会自动创建为700的目录
+			设置为nmStore为NMLeveldbStateStoreService对象
+		如果不开启恢复的话
+			设置nmStore为NMNullStateStoreService对象	
+		nmStore.init
+			NMStateStoreService.serviceInit
+				NMLeveldbStateStoreService.initStorage
+					createStorageDir
+						创建文件$yarn.nodemanager.recovery.dir/yarn-nm-state目录，并设置为700权限
+					通过JNI打开访问leveldb的数据库，将
+		nmStore.start
+			NMStateStoreService.serviceStart
+				NMLeveldbStateStoreService.startStorage						//什么都没做
+recoverTokens
+	如果store可以恢复				// NMNullStateStoreService会返回false，NMLeveldbStateStoreService会返回true
+	nmTokenSecretManager.recover
+		stateStore.loadNMTokensState
+			加载applicationMasterKeys，currentMasterKey，previousMasterKey。分别表示应用attempt，当前nm和之前nm的masterkey
+		然后将leveldb中的数据加载到内存中		
+	containerTokenSecretManager.recover
+		主要加载container相关的内容
+createNMContext					//在nmContext中增加了nmStore
+	
+
+
+关闭nm的时候
+NodeManager.serviceStop
+	stopRecoveryStore
+		NMStateStoreService.serviceStop
+			NMLeveldbStateStoreService.closeStorage
+				只是简单地关闭数据库对象
+				
+				
+另外，在NMContext中设置stateStore,有状态转化会存储				
+
+
+
+关于shuffle的影响
+1. shuffle端口的返回
+ContainerLauncherImpl.Container.launch中startContainers这个回调中会包含提供的shuffle信息
+
+实际是通过startContainers返回，注意nm端该调用的最后返回处。shuffle端口是通过getAuxServiceMetaData服务传给下游的。
+nm在启动的时候会根据配置项yarn.nodemanager.aux-services来注册aux服务，我们配置了mr的shuffle和spark的shuffe。
+AuxServices会根据配置来提供服务，并将
+
+
+spark.shuffle.service.port  7337

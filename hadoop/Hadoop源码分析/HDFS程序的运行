@@ -18,7 +18,7 @@
     IOUtils.copyBytes(in, System.out,50,false);
 
     // 4. 删除文件
-    //fileSystem.delete(new Path("/mytext"));
+    //fs.delete(new Path("/mytext"));
 
 1.2 程序分析
 FileSystem.get					//DistributedFileSystem 返回DistributedFileSystem对象
@@ -33,9 +33,23 @@ fs.create
 					dfsClient.namenode.create								//通过ClientProtocol协议向namenode调用create方法，返回文件状态
 					返回一个DFSOutputStream对象
 				beginFileLease					// 第一个参数为文件id，在nn端返回的state中。第二个参数为DFSOutputStream
-					getLeaseRenewer().put(inodeId, out, this)						
+					getLeaseRenewer().put(inodeId, out, this)
+						启动后台线程, 执行LeaseRenewer.this.run
+						LeaseRenewer.this.run
+							达到软超时的一般时间没有renew，就调用renew
+							renew
+								排序dfsclient列表，主要是为了查出重名的
+								遍历之前所有列表DFSClient
+									renewLease
+										namenode.renewLease						// 发送namenode请求更新租约						
 		dfs.createWrappedOutputStream									//加密使用，暂不考虑
 
+RPC调用级别: 
+client         															nn
+        -----(ClientProtocol.create)----->
+			  ---(ClientProtocol.renewLease)---> 后台不断刷新
+			
+		
 /*----- nn端分析 -----*/
 nn端rpc调用处理create方法，通过NameNodeRpcServer响应的
 NameNodeRpcServer.create
@@ -73,6 +87,10 @@ NameNodeRpcServer.create
 			FSDirStatAndListingOp.getFileInfo		//获取文件信息用于打印日志				
 /*-------------------*/	
 
+RPC级别调用:
+client	-----(addBlock)--->	NameNode
+client	-----(writeBlock)-> DataNode
+
 out.write																	// DFSOutputStream.write
 	FSOutputSummer.write										// FSOutputSummer.write
 		FSOutputSummer.write1
@@ -95,7 +113,6 @@ out.write																	// DFSOutputStream.write
 								假如发送完毕，调用waitAndQueueCurrentPacket发送空的packet				// blockSize是通过构造DFSOutputStream得到, 源自于create返回的state
 			否则，按照缓冲区剩余的字节数目截取部分字节调用flushBuffer写入
 				flushBuffer												//设置也是调用writeChecksumChunks
-
 
 //可以清楚主线程只是想缓冲区不断地写入DFSPacket。DataStreamer拿出这些数据负责写块，具体的分块的流程是DataStreamer执行的。
 
@@ -199,12 +216,36 @@ fs.open
 						这里为构造函数触发的操作，locatedBlocks必为null
 						更新locatedBlocks为getLocatedBlocks的返回值，即文件对应的块信息等。
 						假如最后一个块还没有完成
-							
-		
-IOUtils.copyBytes														// 实质就是从DistributedFileSystem中read出来，然后写入输出。这里仅仅关注read
-	DFSInputStream.read
-		DFSInputStream.pread									
-			
+							获取最后一个块
+							readBlockLength					
+								遍历这个块对应的dn列表
+									构造一个访问DN的代理接口cdp
+									然后通过rpc调用dn的getReplicaVisibleLength方法，获取对应快能访问的长度。如果有一个可访问快长度大于0，立即返回。
+							设置最后一个块的长度
+					如果第一次没有成功的话，对fetchLocatedBlocksAndGetLastBlockLength重试
+	dfs.createWrappedInputStream							// 返回HdfsDataInputStream对象，传入的是DFSClient.open构造的DFSInputStream对象，即输入流。
+	
+IOUtils.copyBytes														// 实质就是从HdfsDataInputStream中read出来，然后写入输出。这里仅仅关注read
+	HdfsDataInputStream.read				// 一个参数
+		in.read					// 其中in为构造HdfsDataInputStream对象传入的DFSInputStream对象
+			DFSInputStream.read
+				readWithStrategy
+					假如当前的游标pos小于文件长度说明文件没有读完，继续读
+						blockSeekTo
+							closeCurrentBlockReader				// 关闭当前的blockReader
+							进入一个循环
+								getBlockAt									// 从当前的locatedBlocks中找到offset所造的块。如果找不到，会rpc调用nn.getBlockLocations(两个参数)获取块信息
+								更新当前的要读的位置pos，更新当前块的末端blockEnd，更新当前读取块currentLocatedBlock
+								chooseDataNode							
+									getBestNodeDNAddrPair			// 即拿出LocatedBlock.getLocations的第一个值     ??????
+								构造blockReader
+						readBuffer
+							reader.doRead									// 读到buffer
+							seekToBlockSource							// 重新连接一下这个block对应的DN
+						更新pos, stats参数等	
+
+fs.delete
+	namenode.delete														// 略		
 
 2 hdfs命令的说明
 2.1 hdfs dfs -ls /test

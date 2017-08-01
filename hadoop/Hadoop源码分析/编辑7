@@ -1,0 +1,198 @@
+task_1495632926847_2439078_m_006800
+
+container_1495632926847_2439078_01_005680
+
+
+
+nn 端
+
+[yarn@BJYF-Druid-19616 yarn-logs]$ grep "container_1495632926847_2439078_01_005680" yarn-yarn-nodemanager-BJYF-Druid-19616.hadoop.jd.local.log
+[2017-06-13T15:00:11.981+08:00] [INFO] nodemanager.containermanager.ContainerManagerImpl.startContainerInternal(ContainerManagerImpl.java 816) [IPC Server handler 8 on 50086] : Start request for container_1495632926847_2439078_01_005680 by user mart_cd
+[2017-06-13T15:00:11.981+08:00] [INFO] server.nodemanager.NMAuditLogger.logSuccess(NMAuditLogger.java 89) [IPC Server handler 8 on 50086] : USER=mart_cd        IP=172.16.178.18        OPERATION=Start Container Request  TARGET=ContainerManageImpl      RESULT=SUCCESS  APPID=application_1495632926847_2439078 CONTAINERID=container_1495632926847_2439078_01_005680
+[2017-06-13T15:00:43.473+08:00] [INFO] containermanager.application.ApplicationImpl.transition(ApplicationImpl.java 304) [AsyncDispatcher event handler] : Adding container_1495632926847_2439078_01_005680 to application application_1495632926847_2439078
+
+*****
+[2017-06-13T15:00:43.479+08:00] [INFO] containermanager.container.ContainerImpl.handle(ContainerImpl.java 1137) [AsyncDispatcher event handler] : Container container_1495632926847_2439078_01_005680 transitioned from NEW to LOCALIZING
+
+(搜索代码发现下面一句是new->LOCALIZING状态转换过程的，说明不是containerlocalize慢，而是nm的问题)
+[2017-06-13T15:02:26.924+08:00] [INFO] network.yarn.YarnShuffleService.initializeContainer(YarnShuffleService.java 152) [AsyncDispatcher event handler] : Initializing container container_1495632926847_2439078_01_005680
+*****
+
+[2017-06-13T15:02:26.930+08:00] [INFO] containermanager.container.ContainerImpl.handle(ContainerImpl.java 1137) [AsyncDispatcher event handler] : Container container_1495632926847_2439078_01_005680 transitioned from LOCALIZING to LOCALIZED
+[2017-06-13T15:02:30.087+08:00] [INFO] containermanager.container.ContainerImpl.handle(ContainerImpl.java 1137) [AsyncDispatcher event handler] : Container container_1495632926847_2439078_01_005680 transitioned from LOCALIZED to RUNNING
+[2017-06-13T15:02:34.108+08:00] [INFO] containermanager.monitor.ContainersMonitorImpl.run(ContainersMonitorImpl.java 371) [Container Monitor] : Starting resource-monitoring for container_1495632926847_2439078_01_005680
+[2017-06-13T15:02:34.524+08:00] [INFO] containermanager.monitor.ContainersMonitorImpl.run(ContainersMonitorImpl.java 459) [Container Monitor] : Memory usage of ProcessTree 15839 for container-id container_1495632926847_2439078_01_005680: 142.0 MB of 2 GB physical memory used; 2.3 GB of 6.2 GB virtual memory used
+[2017-06-13T15:02:38.432+08:00] [INFO] containermanager.monitor.ContainersMonitorImpl.run(ContainersMonitorImpl.java 459) [Container Monitor] : Memory usage of ProcessTree 15839 for container-id container_1495632926847_2439078_01_005680: 275.6 MB of 2 GB physical memory used; 2.3 GB of 6.2 GB virtual memory used
+[2017-06-13T15:02:42.552+08:00] [INFO] containermanager.monitor.ContainersMonitorImpl.run(ContainersMonitorImpl.java 459) [Container Monitor] : Memory usage of ProcessTree 15839 for container-id container_1495632926847_2439078_01_005680: 969.1 MB of 2 GB physical memory used; 2.3 GB of 6.2 GB virtual memory used
+[2017-06-13T15:02:46.622+08:00] [INFO] containermanager.monitor.ContainersMonitorImpl.run(ContainersMonitorImpl.java 459) [Container Monitor] : Memory usage of ProcessTree 15839 for container-id container_1495632926847_2439078_01_005680: 1.0 GB of 2 GB physical memory used; 2.3 GB of 6.2 GB virtual memory used
+[2017-06-13T15:02:50.505+08:00] [INFO] containermanager.monitor.ContainersMonitorImpl.run(ContainersMonitorImpl.java 459) [Container Monitor] : Memory usage of ProcessTree 15839 for container-id container_1495632926847_2439078_01_005680: 1.0 GB of 2 GB physical memory used; 2.3 GB of 6.2 GB virtual memory used
+[2017-06-13T15:02:54.144+08:00] [INFO] containermanager.monitor.ContainersMonitorImpl.run(ContainersMonitorImpl.java 459) [Container Monitor] : Memory usage of ProcessTree 15839 for container-id container_1495632926847_2439078_01_005680: 1.0 GB of 2 GB physical memory used; 2.3 GB of 6.2 GB virtual memory used
+[2017-06-13T15:02:57.555+08:00] [INFO] containermanager.monitor.ContainersMonitorImpl.run(ContainersMonitorImpl.java 459) [Container Monitor] : Memory usage of ProcessTree 15839 for container-id container_1495632926847_2439078_01_005680: 1.1 GB of 2 GB physical memory used; 2.3 GB of 6.2 GB virtual memory used
+[2017-06-13T15:02:58.293+08:00] [INFO] nodemanager.containermanager.ContainerManagerImpl.stopContainerInternal(ContainerManagerImpl.java 966) [IPC Server handler 9 on 50086] : Stopping container with container Id: container_1495632926847_2439078_01_005680
+[2017-06-13T15:02:58.293+08:00] [INFO] server.nodemanager.NMAuditLogger.logSuccess(NMAuditLogger.java 89) [IPC Server handler 9 on 50086] : USER=mart_cd        IP=172.16.178.18        OPERATION=Stop Container Request   TARGET=ContainerManageImpl      RESULT=SUCCESS  APPID=application_1495632926847_2439078 CONTAINERID=container_1495632926847_2439078_01_005680
+[2017-06-13T15:02:58.293+08:00] [INFO] containermanager.container.ContainerImpl.handle(ContainerImpl.java 1137) [AsyncDispatcher event handler] : Container container_1495632926847_2439078_01_005680 transitioned from RUNNING to KILLING
+[2017-06-13T15:02:58.293+08:00] [INFO] containermanager.launcher.ContainerLaunch.cleanupContainer(ContainerLaunch.java 427) [AsyncDispatcher event handler] : Cleaning up container container_1495632926847_2439078_01_005680
+Writing to tmp file /data7/yarn1/local/nmPrivate/application_1495632926847_2439078/container_1495632926847_2439078_01_005680/container_1495632926847_2439078_01_005680.pid.tmp
+[2017-06-13T15:02:58.298+08:00] [WARN] server.nodemanager.LinuxContainerExecutor.launchContainer(LinuxContainerExecutor.java 365) [ContainersLauncher #49207] : Exit code from container container_1495632926847_2439078_01_005680 is : 143
+[2017-06-13T15:02:58.761+08:00] [INFO] containermanager.container.ContainerImpl.handle(ContainerImpl.java 1137) [AsyncDispatcher event handler] : Container container_1495632926847_2439078_01_005680 transitioned from KILLING to CONTAINER_CLEANEDUP_AFTER_KILL
+[2017-06-13T15:02:58.762+08:00] [INFO] server.nodemanager.NMAuditLogger.logSuccess(NMAuditLogger.java 89) [AsyncDispatcher event handler] : USER=mart_cd        OPERATION=Container Finished - Killed      TARGET=ContainerImpl    RESULT=SUCCESS  APPID=application_1495632926847_2439078 CONTAINERID=container_1495632926847_2439078_01_005680
+[2017-06-13T15:02:58.762+08:00] [INFO] containermanager.container.ContainerImpl.handle(ContainerImpl.java 1137) [AsyncDispatcher event handler] : Container container_1495632926847_2439078_01_005680 transitioned from CONTAINER_CLEANEDUP_AFTER_KILL to DONE
+[2017-06-13T15:02:58.762+08:00] [INFO] containermanager.application.ApplicationImpl.transition(ApplicationImpl.java 347) [AsyncDispatcher event handler] : Removing container_1495632926847_2439078_01_005680 from application application_1495632926847_2439078
+[2017-06-13T15:02:58.762+08:00] [INFO] containermanager.logaggregation.AppLogAggregatorImpl.startContainerLogAggregation(AppLogAggregatorImpl.java 513) [AsyncDispatcher event handler] : Considering container container_1495632926847_2439078_01_005680 for log-aggregation
+[2017-06-13T15:02:58.762+08:00] [INFO] network.yarn.YarnShuffleService.stopContainer(YarnShuffleService.java 158) [AsyncDispatcher event handler] : Stopping container container_1495632926847_2439078_01_005680
+[2017-06-13T15:03:00.684+08:00] [INFO] containermanager.monitor.ContainersMonitorImpl.run(ContainersMonitorImpl.java 385) [Container Monitor] : Stopping resource-monitoring for container_1495632926847_2439078_01_005680
+[2017-06-13T15:03:28.560+08:00] [INFO] server.nodemanager.NodeStatusUpdaterImpl.removeOrTrackCompletedContainersFromContext(NodeStatusUpdaterImpl.java 482) [Node Status Updater] : Removed completed containers from NM context: [container_1495632926847_2434472_01_007491, container_1495632926847_2441051_01_000935, container_1495632926847_2431165_01_004133, container_1495632926847_2441051_01_000936, container_1495632926847_2440375_01_014242, container_1495632926847_2441051_01_000934, container_1495632926847_2433229_01_009809, container_1495632926847_2441533_01_002051, container_1495632926847_2439078_01_005680, container_1495632926847_2435029_01_007042, container_1495632926847_2441323_01_002346, container_1495632926847_2440375_01_013847, container_1495632926847_2440375_01_013848, container_1495632926847_2441362_01_000288]
+[yarn@BJYF-Druid-19616 yarn-logs]$ 
+
+
+
+am 端
+[root@BJYF-Docker-189122 tmp]# grep "attempt_1495632926847_2439078_m_006800_0" 1495632926847_2439078.log -ir
+2017-06-13 14:39:24,354 INFO [AsyncDispatcher event handler] org.apache.hadoop.mapreduce.v2.app.job.impl.TaskAttemptImpl: attempt_1495632926847_2439078_m_006800_0 TaskAttempt Transitioned from NEW to UNASSIGNED
+2017-06-13 15:00:11,940 INFO [RMCommunicator Allocator] org.apache.hadoop.mapreduce.v2.app.rm.RMContainerAllocator: Assigned container container_1495632926847_2439078_01_005680 to attempt_1495632926847_2439078_m_006800_0
+2017-06-13 15:00:11,947 INFO [AsyncDispatcher event handler] org.apache.hadoop.mapreduce.v2.app.job.impl.TaskAttemptImpl: attempt_1495632926847_2439078_m_006800_0 TaskAttempt Transitioned from UNASSIGNED to ASSIGNED
+2017-06-13 15:00:11,951 INFO [ContainerLauncher #48] org.apache.hadoop.mapreduce.v2.app.launcher.ContainerLauncherImpl: Processing the event EventType: CONTAINER_REMOTE_LAUNCH for container container_1495632926847_2439078_01_005680 taskAttempt attempt_1495632926847_2439078_m_006800_0
+2017-06-13 15:00:11,951 INFO [ContainerLauncher #48] org.apache.hadoop.mapreduce.v2.app.launcher.ContainerLauncherImpl: Launching attempt_1495632926847_2439078_m_006800_0
+2017-06-13 15:00:11,965 INFO [ContainerLauncher #48] org.apache.hadoop.mapreduce.v2.app.launcher.ContainerLauncherImpl: Shuffle port returned by ContainerManager for attempt_1495632926847_2439078_m_006800_0 : 13562
+2017-06-13 15:00:11,972 INFO [AsyncDispatcher event handler] org.apache.hadoop.mapreduce.v2.app.job.impl.TaskAttemptImpl: TaskAttempt: [attempt_1495632926847_2439078_m_006800_0] using containerId: [container_1495632926847_2439078_01_005680 on NM: [BJYF-Druid-19616.hadoop.jd.local:50086]
+2017-06-13 15:00:11,972 INFO [AsyncDispatcher event handler] org.apache.hadoop.mapreduce.v2.app.job.impl.TaskAttemptImpl: attempt_1495632926847_2439078_m_006800_0 TaskAttempt Transitioned from ASSIGNED to RUNNING
+2017-06-13 15:02:34,633 INFO [IPC Server handler 0 on 1144] org.apache.hadoop.mapred.TaskAttemptListenerImpl: JVM with ID: jvm_1495632926847_2439078_m_005680 given task: attempt_1495632926847_2439078_m_006800_0
+2017-06-13 15:02:41,211 INFO [IPC Server handler 25 on 1144] org.apache.hadoop.ipc.Server: IPC Server handler 25 on 1144: ping(attempt_1495632926847_2439078_m_006800_0), rpc version=2, client version=19, methodsFingerPrint=937413979 from 172.16.196.16:38580 Call#8 Retry#0 for RpcKind RPC_WRITABLE
+2017-06-13 15:02:44,917 INFO [IPC Server handler 9 on 1144] org.apache.hadoop.ipc.Server: IPC Server handler 9 on 1144: statusUpdate(attempt_1495632926847_2439078_m_006800_0, org.apache.hadoop.mapred.MapTaskStatus@8b795e0), rpc version=2, client version=19, methodsFingerPrint=937413979 from 172.16.196.16:38580 Call#9 Retry#0 for RpcKind RPC_WRITABLE
+2017-06-13 15:02:44,917 INFO [IPC Server handler 9 on 1144] org.apache.hadoop.mapred.TaskAttemptListenerImpl: Progress of TaskAttempt attempt_1495632926847_2439078_m_006800_0 is : 0.00960499
+2017-06-13 15:02:48,339 INFO [IPC Server handler 16 on 1144] org.apache.hadoop.ipc.Server: IPC Server handler 16 on 1144: statusUpdate(attempt_1495632926847_2439078_m_006800_0, org.apache.hadoop.mapred.MapTaskStatus@45f68019), rpc version=2, client version=19, methodsFingerPrint=937413979 from 172.16.196.16:38580 Call#10 Retry#0 for RpcKind RPC_WRITABLE
+2017-06-13 15:02:48,339 INFO [IPC Server handler 16 on 1144] org.apache.hadoop.mapred.TaskAttemptListenerImpl: Progress of TaskAttempt attempt_1495632926847_2439078_m_006800_0 is : 0.14182885
+2017-06-13 15:02:51,399 INFO [IPC Server handler 29 on 1144] org.apache.hadoop.ipc.Server: IPC Server handler 29 on 1144: statusUpdate(attempt_1495632926847_2439078_m_006800_0, org.apache.hadoop.mapred.MapTaskStatus@39eef075), rpc version=2, client version=19, methodsFingerPrint=937413979 from 172.16.196.16:38580 Call#11 Retry#0 for RpcKind RPC_WRITABLE
+2017-06-13 15:02:51,399 INFO [IPC Server handler 29 on 1144] org.apache.hadoop.mapred.TaskAttemptListenerImpl: Progress of TaskAttempt attempt_1495632926847_2439078_m_006800_0 is : 0.3411571
+2017-06-13 15:02:54,266 INFO [IPC Server handler 13 on 1144] org.apache.hadoop.ipc.Server: IPC Server handler 13 on 1144: statusUpdate(attempt_1495632926847_2439078_m_006800_0, org.apache.hadoop.mapred.MapTaskStatus@33f27e39), rpc version=2, client version=19, methodsFingerPrint=937413979 from 172.16.196.16:38580 Call#12 Retry#0 for RpcKind RPC_WRITABLE
+2017-06-13 15:02:54,266 INFO [IPC Server handler 13 on 1144] org.apache.hadoop.mapred.TaskAttemptListenerImpl: Progress of TaskAttempt attempt_1495632926847_2439078_m_006800_0 is : 0.3411571
+2017-06-13 15:02:54,520 INFO [IPC Server handler 5 on 1144] org.apache.hadoop.ipc.Server: IPC Server handler 5 on 1144: statusUpdate(attempt_1495632926847_2439078_m_006800_0, org.apache.hadoop.mapred.MapTaskStatus@43372fca), rpc version=2, client version=19, methodsFingerPrint=937413979 from 172.16.196.16:38580 Call#13 Retry#0 for RpcKind RPC_WRITABLE
+2017-06-13 15:02:54,520 INFO [IPC Server handler 5 on 1144] org.apache.hadoop.mapred.TaskAttemptListenerImpl: Progress of TaskAttempt attempt_1495632926847_2439078_m_006800_0 is : 0.667
+2017-06-13 15:02:57,598 INFO [IPC Server handler 3 on 1144] org.apache.hadoop.ipc.Server: IPC Server handler 3 on 1144: statusUpdate(attempt_1495632926847_2439078_m_006800_0, org.apache.hadoop.mapred.MapTaskStatus@4dbf3627), rpc version=2, client version=19, methodsFingerPrint=937413979 from 172.16.196.16:38580 Call#14 Retry#0 for RpcKind RPC_WRITABLE
+2017-06-13 15:02:57,598 INFO [IPC Server handler 3 on 1144] org.apache.hadoop.mapred.TaskAttemptListenerImpl: Progress of TaskAttempt attempt_1495632926847_2439078_m_006800_0 is : 0.667
+2017-06-13 15:02:58,266 INFO [IPC Server handler 1 on 1144] org.apache.hadoop.ipc.Server: IPC Server handler 1 on 1144: statusUpdate(attempt_1495632926847_2439078_m_006800_0, org.apache.hadoop.mapred.MapTaskStatus@15f21674), rpc version=2, client version=19, methodsFingerPrint=937413979 from 172.16.196.16:38580 Call#15 Retry#0 for RpcKind RPC_WRITABLE
+2017-06-13 15:02:58,266 INFO [IPC Server handler 1 on 1144] org.apache.hadoop.mapred.TaskAttemptListenerImpl: Progress of TaskAttempt attempt_1495632926847_2439078_m_006800_0 is : 1.0
+2017-06-13 15:02:58,267 INFO [IPC Server handler 23 on 1144] org.apache.hadoop.ipc.Server: IPC Server handler 23 on 1144: done(attempt_1495632926847_2439078_m_006800_0), rpc version=2, client version=19, methodsFingerPrint=937413979 from 172.16.196.16:38580 Call#16 Retry#0 for RpcKind RPC_WRITABLE
+2017-06-13 15:02:58,267 INFO [IPC Server handler 23 on 1144] org.apache.hadoop.mapred.TaskAttemptListenerImpl: Done acknowledgement from attempt_1495632926847_2439078_m_006800_0
+2017-06-13 15:02:58,267 INFO [AsyncDispatcher event handler] org.apache.hadoop.mapreduce.v2.app.job.impl.TaskAttemptImpl: attempt_1495632926847_2439078_m_006800_0 TaskAttempt Transitioned from RUNNING to SUCCESS_CONTAINER_CLEANUP
+2017-06-13 15:02:58,268 INFO [ContainerLauncher #70] org.apache.hadoop.mapreduce.v2.app.launcher.ContainerLauncherImpl: Processing the event EventType: CONTAINER_REMOTE_CLEANUP for container container_1495632926847_2439078_01_005680 taskAttempt attempt_1495632926847_2439078_m_006800_0
+2017-06-13 15:02:58,268 INFO [ContainerLauncher #70] org.apache.hadoop.mapreduce.v2.app.launcher.ContainerLauncherImpl: KILLING attempt_1495632926847_2439078_m_006800_0
+2017-06-13 15:02:58,272 INFO [AsyncDispatcher event handler] org.apache.hadoop.mapreduce.v2.app.job.impl.TaskAttemptImpl: attempt_1495632926847_2439078_m_006800_0 TaskAttempt Transitioned from SUCCESS_CONTAINER_CLEANUP to SUCCEEDED
+2017-06-13 15:02:58,273 INFO [AsyncDispatcher event handler] org.apache.hadoop.mapreduce.v2.app.job.impl.TaskImpl: Task succeeded with attempt attempt_1495632926847_2439078_m_006800_0
+2017-06-13 15:03:26,944 INFO [AsyncDispatcher event handler] org.apache.hadoop.mapreduce.v2.app.job.impl.TaskAttemptImpl: Diagnostics report from attempt_1495632926847_2439078_m_006800_0: Container killed by the ApplicationMaster.
+
+
+
+2017-06-13T14:57:43.213+0800: 1704031.532: [GC
+Desired survivor size 11534336 bytes, new threshold 1 (max 15)
+ [PSYoungGen: 1030560K->5312K(1036288K)] 2017662K->992568K(3133440K), 0.0240980 secs] [Times: user=0.00 sys=0.00, real=0.03 secs] 
+2017-06-13T14:57:43.238+0800: 1704031.556: Total time for which application threads were stopped: 0.0286820 seconds
+2017-06-13T14:58:06.214+0800: 1704054.532: Application time: 22.9759100 seconds
+2017-06-13T14:58:06.219+0800: 1704054.537: [GC
+Desired survivor size 11010048 bytes, new threshold 1 (max 15)
+ [PSYoungGen: 1029824K->5977K(1037824K)] 2017080K->993532K(3134976K), 0.0272070 secs] [Times: user=0.08 sys=0.17, real=0.03 secs] 
+2017-06-13T14:58:06.247+0800: 1704054.565: Total time for which application threads were stopped: 0.0330610 seconds
+2017-06-13T14:58:33.091+0800: 1704081.409: Application time: 26.8437880 seconds
+2017-06-13T14:58:33.095+0800: 1704081.413: [GC
+Desired survivor size 11010048 bytes, new threshold 1 (max 15)
+ [PSYoungGen: 1032537K->5984K(1037312K)] 2020092K->993955K(3134464K), 0.0266120 secs] [Times: user=0.51 sys=0.00, real=0.02 secs] 
+2017-06-13T14:58:33.122+0800: 1704081.440: Total time for which application threads were stopped: 0.0315040 seconds
+2017-06-13T14:59:01.049+0800: 1704109.367: Application time: 27.9266920 seconds
+2017-06-13T14:59:01.053+0800: 1704109.371: [GC
+Desired survivor size 10485760 bytes, new threshold 1 (max 15)
+ [PSYoungGen: 1032544K->6720K(1038336K)] 2020515K->994794K(3135488K), 0.1314160 secs] [Times: user=0.23 sys=0.28, real=0.14 secs] 
+2017-06-13T14:59:01.185+0800: 1704109.503: Total time for which application threads were stopped: 0.1362290 seconds
+2017-06-13T14:59:32.292+0800: 1704140.610: Application time: 31.1071170 seconds
+2017-06-13T14:59:32.298+0800: 1704140.616: [GC
+Desired survivor size 10485760 bytes, new threshold 1 (max 15)
+ [PSYoungGen: 1034304K->6880K(1037824K)] 2022378K->995222K(3134976K), 0.0278770 secs] [Times: user=0.14 sys=0.09, real=0.03 secs] 
+2017-06-13T14:59:32.326+0800: 1704140.645: Total time for which application threads were stopped: 0.0342300 seconds
+2017-06-13T15:00:06.392+0800: 1704174.710: Application time: 34.0652720 seconds
+2017-06-13T15:00:06.397+0800: 1704174.715: [GC
+Desired survivor size 10485760 bytes, new threshold 1 (max 15)
+ [PSYoungGen: 1034464K->6624K(1038336K)] 2022806K->995414K(3135488K), 0.0332560 secs] [Times: user=0.00 sys=0.00, real=0.03 secs] 
+2017-06-13T15:00:06.431+0800: 1704174.749: Total time for which application threads were stopped: 0.0388860 seconds
+2017-06-13T15:00:36.151+0800: 1704204.469: Application time: 29.7204360 seconds
+2017-06-13T15:00:36.155+0800: 1704204.473: Total time for which application threads were stopped: 0.0038710 seconds
+2017-06-13T15:01:13.683+0800: 1704242.001: Application time: 37.5281500 seconds
+2017-06-13T15:01:13.691+0800: 1704242.009: [GC
+Desired survivor size 9961472 bytes, new threshold 1 (max 15)
+ [PSYoungGen: 1034720K->5241K(1038336K)] 2023510K->994398K(3135488K), 0.0272410 secs] [Times: user=0.11 sys=0.23, real=0.03 secs] 
+2017-06-13T15:01:13.718+0800: 1704242.037: Total time for which application threads were stopped: 0.0353110 seconds
+2017-06-13T15:01:21.406+0800: 1704249.724: Application time: 7.6871910 seconds
+2017-06-13T15:01:21.408+0800: 1704249.727: Total time for which application threads were stopped: 0.0028580 seconds
+2017-06-13T15:01:21.410+0800: 1704249.728: Application time: 0.0012370 seconds
+2017-06-13T15:01:21.412+0800: 1704249.730: Total time for which application threads were stopped: 0.0023240 seconds
+2017-06-13T15:01:21.413+0800: 1704249.732: Application time: 0.0013710 seconds
+2017-06-13T15:01:21.416+0800: 1704249.734: Total time for which application threads were stopped: 0.0022870 seconds
+2017-06-13T15:01:21.418+0800: 1704249.736: Application time: 0.0020910 seconds
+2017-06-13T15:01:21.420+0800: 1704249.738: Total time for which application threads were stopped: 0.0021150 seconds
+2017-06-13T15:01:22.319+0800: 1704250.637: Application time: 0.8991370 seconds
+2017-06-13T15:01:22.322+0800: 1704250.640: Total time for which application threads were stopped: 0.0025950 seconds
+2017-06-13T15:01:22.338+0800: 1704250.656: Application time: 0.0160310 seconds
+2017-06-13T15:01:22.340+0800: 1704250.658: Total time for which application threads were stopped: 0.0024280 seconds
+2017-06-13T15:01:22.340+0800: 1704250.658: Application time: 0.0001820 seconds
+2017-06-13T15:01:22.348+0800: 1704250.666: Total time for which application threads were stopped: 0.0077380 seconds
+2017-06-13T15:01:26.267+0800: 1704254.586: Application time: 3.9194070 seconds
+2017-06-13T15:01:26.271+0800: 1704254.589: Total time for which application threads were stopped: 0.0036470 seconds
+2017-06-13T15:01:27.361+0800: 1704255.680: Application time: 1.0904860 seconds
+2017-06-13T15:01:27.365+0800: 1704255.683: Total time for which application threads were stopped: 0.0031960 seconds
+2017-06-13T15:01:27.418+0800: 1704255.736: Application time: 0.0530920 seconds
+2017-06-13T15:01:27.424+0800: 1704255.743: Total time for which application threads were stopped: 0.0066890 seconds
+2017-06-13T15:01:28.210+0800: 1704256.529: Application time: 0.7858550 seconds
+2017-06-13T15:01:28.214+0800: 1704256.532: Total time for which application threads were stopped: 0.0033190 seconds
+2017-06-13T15:01:28.244+0800: 1704256.562: Application time: 0.0303670 seconds
+2017-06-13T15:01:28.249+0800: 1704256.567: Total time for which application threads were stopped: 0.0049900 seconds
+2017-06-13T15:01:28.284+0800: 1704256.602: Application time: 0.0347010 seconds
+2017-06-13T15:01:28.289+0800: 1704256.607: Total time for which application threads were stopped: 0.0053670 seconds
+2017-06-13T15:01:28.380+0800: 1704256.698: Application time: 0.0908220 seconds
+2017-06-13T15:01:28.386+0800: 1704256.704: Total time for which application threads were stopped: 0.0063500 seconds
+2017-06-13T15:01:30.227+0800: 1704258.546: Application time: 1.8411780 seconds
+2017-06-13T15:01:30.233+0800: 1704258.551: [GC
+Desired survivor size 54001664 bytes, new threshold 1 (max 15)
+ [PSYoungGen: 1033337K->9714K(952832K)] 2022494K->1112283K(3049984K), 0.0511510 secs] [Times: user=0.00 sys=0.00, real=0.05 secs] 
+2017-06-13T15:01:30.285+0800: 1704258.603: Total time for which application threads were stopped: 0.0573460 seconds
+2017-06-13T15:01:35.100+0800: 1704263.418: Application time: 4.8147870 seconds
+2017-06-13T15:01:35.106+0800: 1704263.424: [GC
+Desired survivor size 61341696 bytes, new threshold 1 (max 15)
+ [PSYoungGen: 952818K->46410K(989696K)] 2055387K->1156257K(3086848K), 0.0512030 secs] [Times: user=0.17 sys=0.10, real=0.05 secs] 
+2017-06-13T15:01:35.159+0800: 1704263.477: Total time for which application threads were stopped: 0.0591960 seconds
+2017-06-13T15:01:37.632+0800: 1704265.950: Application time: 2.4727720 seconds
+2017-06-13T15:01:37.637+0800: 1704265.955: Total time for which application threads were stopped: 0.0053190 seconds
+2017-06-13T15:01:37.637+0800: 1704265.955: Application time: 0.0002020 seconds
+2017-06-13T15:01:37.641+0800: 1704265.959: Total time for which application threads were stopped: 0.0041380 seconds
+2017-06-13T15:01:37.675+0800: 1704265.993: Application time: 0.0337480 seconds
+2017-06-13T15:01:37.680+0800: 1704265.998: Total time for which application threads were stopped: 0.0047500 seconds
+2017-06-13T15:01:38.575+0800: 1704266.894: Application time: 0.8957670 seconds
+2017-06-13T15:01:38.580+0800: 1704266.899: Total time for which application threads were stopped: 0.0049870 seconds
+2017-06-13T15:01:38.659+0800: 1704266.977: Application time: 0.0780760 seconds
+2017-06-13T15:01:38.663+0800: 1704266.981: Total time for which application threads were stopped: 0.0045520 seconds
+2017-06-13T15:01:39.807+0800: 1704268.126: Application time: 1.1442200 seconds
+2017-06-13T15:01:39.813+0800: 1704268.131: [GC
+Desired survivor size 59768832 bytes, new threshold 1 (max 15)
+ [PSYoungGen: 989514K->7026K(990208K)] 2099361K->1156378K(3087360K), 0.0680190 secs] [Times: user=0.25 sys=0.16, real=0.07 secs] 
+2017-06-13T15:01:39.882+0800: 1704268.200: Total time for which application threads were stopped: 0.0742820 seconds
+2017-06-13T15:01:44.532+0800: 1704272.850: Application time: 4.6504400 seconds
+2017-06-13T15:01:44.539+0800: 1704272.858: [GC
+Desired survivor size 57671680 bytes, new threshold 1 (max 15)
+ [PSYoungGen: 938354K->7425K(989696K)] 2087706K->1157146K(3086848K), 0.0504130 secs] [Times: user=0.00 sys=0.00, real=0.05 secs] 
+2017-06-13T15:01:44.590+0800: 1704272.908: Total time for which application threads were stopped: 0.0581530 seconds
+2017-06-13T15:01:50.874+0800: 1704279.193: Application time: 6.2840830 seconds
+2017-06-13T15:01:50.881+0800: 1704279.199: [GC
+Desired survivor size 55050240 bytes, new threshold 1 (max 15)
+ [PSYoungGen: 938753K->10375K(994816K)] 2088474K->1160310K(3091968K), 0.0475640 secs] [Times: user=0.11 sys=0.06, real=0.05 secs] 
+2017-06-13T15:01:50.929+0800: 1704279.247: Total time for which application threads were stopped: 0.0545370 seconds
+2017-06-13T15:02:02.601+0800: 1704290.919: Application time: 11.6722440 seconds
+2017-06-13T15:02:02.604+0800: 1704290.922: [GC
+Desired survivor size 52953088 bytes, new threshold 1 (max 15)
+ [PSYoungGen: 948871K->10493K(992256K)] 2098806K->1163140K(3089408K), 0.0267090 secs] [Times: user=0.10 sys=0.06, real=0.03 secs] 
+2017-06-13T15:02:02.631+0800: 1704290.949: Total time for which application threads were stopped: 0.0300370 seconds
+2017-06-13T15:02:22.738+0800: 1704311.056: Application time: 20.1066000 seconds
+2017-06-13T15:02:22.741+0800: 1704311.059: Total time for which application threads were stopped: 0.0031500 seconds
+2017-06-13T15:02:22.928+0800: 1704311.247: Application time: 0.1875410 seconds
+2017-06-13T15:02:22.931+0800: 1704311.249: Total time for which application threads were stopped: 0.0027280 seconds
+2017-06-13T15:02:23.932+0800: 1704312.250: Application time: 1.0004490 seconds
+2017-06-13T15:02:23.934+0800: 1704312.252: Total time for which application threads were stopped: 0.0023660 seconds
+2017-06-13T15:02:24.641+0800: 1704312.959: Application time: 0.7069940 seconds
+2017-06-13T15:02:24.644+0800: 1704312.962: Total time for which application threads were stopped: 0.0028510 seconds
+2017-06-13T15:02:24.932+0800: 1704313.250: Application time: 0.2877990 seconds

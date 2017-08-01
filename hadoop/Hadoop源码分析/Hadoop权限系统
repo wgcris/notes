@@ -1,0 +1,142 @@
+1. UserGroupInformation
+该类封装了JAAS的信息，提供方法决定用户、组
+然后介绍介个JAAS中的实例
+
+1.1 RealUser
+RealUser对应于JAAS中的Principal，表示一个用户。
+
+
+
+
+
+<property>
+    <name>hadoop.security.group.mapping.path</name>
+    <value>/software/servers/hadoop-2.7.1/etc/hadoop/hadoop-ugmappings.xml</value>
+</property>
+<property>
+    <name>hadoop.security.group.mapping</name>
+    <value>org.apache.hadoop.security.ErpGroupsMapping</value>
+</property>
+
+
+
+以container的token为例子进行说明，其中从AMContainer开始。
+
+/*--------------以下为RM端的处理代码----------------*/
+
+ResourceTrackerService
+	registerNodeManager
+		注册的时候，如果是可用的NM，允许其注册，并发送ContainerTokenMasterKey和sNMTokenMasterKey对应的masterkey
+
+
+/*--------------以下为NM端的处理代码----------------*/
+NodeStatusUpdaterImpl
+	registerWithRM
+		...
+		registerNodeManager											//向RM注册拿到ContainerTokenMasterKey和sNMTokenMasterKey对应的masterkey
+		...	
+		然后将RM返回的token放到NM自己的context端以备后续使用
+
+
+/*--------------以下为RM端的处理代码----------------*/
+
+
+FairScheduler.allocate
+	amrmTokenIdentifier=authorizeRequest
+		UserGroupInformation.getCurrentUser
+			从上下文中拿出Subject对象
+			如果拿不到Subject，或拿不到User类相关的Subject								// 事实上，运行到这一步，肯定会有对应的Subject，这里假设第一次加载，只是为了进一步分析
+				getLoginUser												
+					如果登录用户loginUser为空												//loginUser为static类型，说明了问题
+						loginUserFromSubject
+							ensureInitialized													// 初始化
+							构造Subject对象
+							newLoginContext														// 构造context
+								临时修改了classloader,反正最终就是使用了HadoopLoginModule管理登录
+							login.login
+								会经过某些调用进行到HadoopLoginModule.login				//这里会直接登录成功
+								会经过某些调用进行到HadoopLoginModule.commit 			//提交操作
+									假如使用KERBEROS,会根据KERBEROS获得用户，这里并没有使用KERBEROS
+									如果没有开启安全的话，并且user为null
+										会从环境变量或系统特性中获取HADOOP_USER_NAME，然后根据这个值，构造User对象
+									然后将User对象加入到subject的principals中
+							然后构造UserGroupInformation对象realUser，根据之前登录的Subject
+							获取HADOOP_PROXY_USER变量，如果为空的话，设置loginUser为realUser，否则是proxy用户
+							然后获取HADOOP_TOKEN_FILE_LOCATION的值，如果有值，会读证书并加到loginUser中
+							loginUser.spawnAutoRenewalThreadForUserCreds					// for kerberos, 不考虑
+				selectAMRMTokenIdentifier
+					从remoteUgi获得TokenIdentifiers，将AMRMTokenIdentifier拿出													
+	...
+	pullNewlyAllocatedContainersAndNMTokens
+		会拿出从刚刚分配的container列表
+		RMContainerTokenSecretManager.createContainerToken					// RMContainerTokenSecretManager为RM中专门用于container的token管理器
+			构造ContainerTokenIdentifier对象
+			BaseContainerTokenSecretManager.createPassword
+				SecretManager.createPassword
+					mac.init															//这里使用传入的key(为RMContainerTokenSecretManage对应的currentMasterKey)进行初始化  
+																								//注: mac是一种依据key的hash算法，key不同生成的hash不同，key相同生成hash值相同
+					mac.doFinal														//根据前面介绍的秘钥和ContainerTokenIdentifier对应的字节生成hash值
+					BuilderUtils.newContainerToken				//得到containerToken对象
+		getNMTokenSecretManager.createAndGetNMToken
+			从appAttemptToNodeKeyMap中拿出对应的NodeId的nodeSet			//只有注册的时候修改，说明仅仅存放了AM对应的NM
+			假如nodeSet中不包括nodeSet，说明还没有注册，即这应该是处理AMContainer的流程
+				createNMToken					// 同前
+				构造NMToken
+				返回NMToken。					//如果返回为null，说明已经传递了NMToken。这里AMContainer刚刚分配，因此返回不为null。但是对于该非AM Container的token，由于不在appAttemptToNodeKeyMap中，则每次都会返回对应的NMToken
+		//pullNewlyAllocatedContainersAndNMTokens最后返回了已经分配的container，其中内部有自己的token，并且包含对应的nmtoken
+					
+然后在看上一步调用
+ApplicationMasterService.allocate
+	...
+	this.rScheduler.allocate
+	...
+	allocateResponse.setNMTokens					//将NMToken设置在allocateResponse中
+	更新AMRMToken
+
+
+
+/*--------------以下为AM端的处理代码----------------*/
+startContainers							//接下来从AM Container在启动分析
+	getRemoteUgi
+
+
+
+
+/*--------------以下为AM端的处理代码----------------*/
+// 接下来是普通Container在NM端启动的流程
+getResources						//MRAPPMASTER的心跳进程触发
+	...
+	makeRemoteRequest
+		scheduler.allocate					// 从RM中得到的response
+	...
+	遍历response中的nm的token，将对应的nm的token写入到缓存中
+	updateAMRMToken								// 更新AMRMToken
+
+
+
+
+
+
+/*--------------以下IPC相关的的处理代码----------------*/
+
+(1) 认证用户
+主要通过sasl实现	
+getAuthorizedUgi会从saslServer中获得的AuthorizationID来加载传来的ugi信息，saslServer通过evaluateResponse方法处理带来的AuthorizationID
+猜测是server端开始会发送token给client端，这个token里为验证用户。
+
+
+(2) 验证用户
+processConnectionContext中会分析出协议中User,ProtoUtil.getUgi会创建一个ugi，使用代理ugi，将effectiveuser和realUserUgi都加入进去了
+
+
+
+
+
+2 认证
+以下从认证角度分析
+
+hadoop.security.authentication
+
+
+ApplicationMasterService和ContainerManagerImpl会设置hadoop.security.authentication为TOKEN
+

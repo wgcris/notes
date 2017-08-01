@@ -1,0 +1,10 @@
+1 构造FileSystem对象
+构造FileSystem对象的时候，使用FileSystem.get
+FileSystem.get
+	getDefaultUri根据fs.defaultFS得到默认的ns
+	FileSystem.get
+		分析url的的scheme和authority,这里为fs.defaultFS配合的值，即分别为hdfs://和ns10
+		createFileSystem
+			通过反射构造ViewFileSystem对象
+			ViewFileSystem.initialize
+				

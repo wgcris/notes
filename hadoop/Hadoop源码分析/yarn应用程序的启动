@@ -550,6 +550,7 @@ ContainerManagerImpl处理LogHandlerEventType.APPLICATION_STARTED事件
 			进入APPLICATION_STARTED分支
 				initApp
 					verifyAndCreateRemoteLogDir
+						getFileSystem							// 获取dfs对象
 					initAppAggregator									//日志聚集的功能暂时部分析
 					给ContainerManagerImpl发送ApplicationEventType.APPLICATION_LOG_HANDLING_INITED事件
 
@@ -566,7 +567,7 @@ ContainerManagerImpl处理LocalizationEventType.INIT_APPLICATION_RESOURCES事件
 			把资源放入privateRsrc和appRsrc待处理
 				向ContainerManagerImpl发送ApplicationEventType.APPLICATION_INITED
 
-ContainerManagerImpl处理ApplicationEventType.APPLICATION_INITED 		          
+ContainerManagerImpl处理ApplicationEventType.APPLICATION_INITED
 	ApplicationEventDispatcher.handle					//状态机转换
 		ApplicationState.INITING==(ApplicationEventType.APPLICATION_INITED,AppInitDoneTransition)==>ApplicationState.RUNNING
 			AppInitDoneTransition.transition
@@ -750,8 +751,6 @@ containerMgrProxy
 
 
 /*-----------------以上为NodeManager上的工作------------------------*/
-
-
 
 这里分析如何从RMAppAttemptState.LAUNCHED变化为RMAppAttemptState.RUNNING
 这里就要涉及到关于AM程序的写法，(提交一个yarn任务一般需要两个程序，一个是客户端用户提交程序，另一个是真实的AM程序)
