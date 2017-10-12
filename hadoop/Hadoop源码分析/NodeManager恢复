@@ -52,3 +52,22 @@ AuxServices会根据配置来提供服务，并将
 
 
 spark.shuffle.service.port  7337
+
+
+
+实验:
+1. 未开启NM recovery
+wordcount运行之后，关闭一个已经运行成功map的nm。然后过段时间再开启。map会重新调度，数据会重新生成。
+NM关闭，YarnChild关闭。
+
+2. 开启NM recovery
+wordcount运行之后，map不必从新调度
+
+
+注意:
+如果配置了nm recovery, 没有配置mapreduce.reduce.shuffle.fetch.retry.enabled的情况下。
+会自动开启reduce的shuffle的重试，其中shuffle超时的时间可以根据mapreduce.reduce.shuffle.fetch.retry.timeout-ms配置。默认3分钟
+
+
+
+

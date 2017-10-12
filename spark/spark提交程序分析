@@ -41,12 +41,12 @@ SparkSubmit.main
 	submit(appArgs)					// 提交应用
 		prepareSubmitEnvironment				//其中返回值childArgs为提交的参数和根据配置命令行。primaryResource为传入的primaryResource，即不带任务参数出入的jar包。sysProps为一些配置。childMainClass在yarn-cluster模式为org.apache.spark.deploy.yarn.Client，yarn-client模式为提交的主类。
 			设置clusterManager，deployMode 等...
-			doRunMain
-				这里没有设置代理用户
-				runMain			//传入参数为prepareSubmitEnvironment的返回值
-					设置类加载器，并将提交的jar包加载
-					设置系统属性
-					找到mainClass中的main函数, 并运行它。
+		doRunMain
+			这里没有设置代理用户
+			runMain			//传入参数为prepareSubmitEnvironment的返回值
+				设置类加载器，并将提交的jar包加载
+				设置系统属性
+				找到mainClass中的main函数, 并运行它。
 总结: 这里只分析yarn-client和yarn-cluster的情况。
 		 其中, yarn-client运行类为org.apache.spark.examples.SparkPi
 		 			yarn-cluster运行类为org.apache.spark.deploy.yarn.Client
@@ -422,5 +422,3 @@ RDD.saveAsTextFile
 	RDD.rddToPairRDDFunctions(r)(nullWritableClassTag, textClassTag, null).saveAsHadoopFile[TextOutputFormat[NullWritable, Text]](path)	
 		分两步分析
 		
-
-

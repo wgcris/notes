@@ -124,6 +124,7 @@ DataStreamer.run
 		nextBlockOutputStream									
 			locateFollowingBlock
 				dfsClient.namenode.addBlock												// rpc调用nn端返回一个要写入的块
+					// 后面继续展开				
 			createBlockOutputStream															// 传入要写入块的dn信息。目的是连接第一个DN。实际并没有写数据，因为数据存储于one变量中。
 				进入循环
 					createSocketForPipeline													// 使用块的第一副本的地址创建socket
@@ -398,3 +399,18 @@ dfs.datanode.fsdataset.volume.choosing.policy				解决磁盘不均衡问题
 
 
 
+5. dfsClient.namenode.addBlock
+
+服务端
+NameNodeRpcServer.addBlock
+	设置excludedNodesSet						// pipeline一次写块失败，就会传入excludednodes
+	namesystem.getAdditionalBlock		
+		getNewBlockTargets						// 是getAdditionalBlock的第一部分。使用读锁分析文件，决定是否可以通过客户端增加一个块，检测重试，租约，倒数第二个块的副本数。为新块生成dn列表，但不产生块。
+			...													// 检查工作
+			chooseTarget4NewBlock
+				获取favored列表
+				blockplacement.chooseTarget
+					BlockPlacementPolicy.chooseTarget		
+						BlockPlacementPolicyDefault.chooseTarget
+							BlockPlacementPolicyDefault.chooseTarget
+							

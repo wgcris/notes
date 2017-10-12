@@ -91,4 +91,40 @@ rmClient.allocate
 	
 	
 	
-	
+3. 一次RPC问题的分析
+AM中调用下面方法kill container
+ContainerLauncherImpl.kill
+	ContainerManagementProtocolPBClientImpl.stopContainers
+		ContainerManagementProtocolProxyData.proxy.stopContainers						//这个proxy来自于NMProxy.createNMProxy，构造的时候是根据总延时时间/休眠时间来计算次数的
+		
+		
+RetryInvocationHandler.invoke
+	invokeMethod
+		rpc.getProxy			//根据传入的内容执行如下方法
+			由于传入的接口是ContainerManagementProtocol，因此具体执行的对象为ContainerManagementProtocolPBClientImpl
+				ContainerManagementProtocolPBClientImpl.stopContainers							//根据构造函数，可以知道这个就是调用的RPC接口对应的类
+					proxy.stopContainers				// Invoker
+						会执行ProtobufRpcEngine.Invoker.invoke
+							client.call
+								getConnection
+									setupIOstreams
+										setupConnection
+											根据次数判断是否重试，具体如下。		//ipc.client.connect.max.retries,默认10次   ipc.client.connect.retry.interval,默认1000ms
+	根据次数判断是否得到了超过异常次数					// yarn.client.nodemanager-connect.max-wait-ms 默认3分钟  yarn.client.nodemanager-connect.retry-interval-ms 默认10秒
+																			 // 注: 深入代码您会发现实际传入的参数是次数，因此yarn.client.nodemanager-connect.max-wait-ms并没有生效，生效的是yarn.client.nodemanager-connect.max-wait-ms/yarn.client.nodemanager-connect.retry-interval-ms
+																			 // 所以这里实际等待的时间包括了setupConnection等待时间。因此每次等待cleanup container超时时间为6min10s就可以解释了
+																			 // 时间为  (3*60/10)*(10+10)+10=190s,恰好为6分10s。为什么最后加一个10?是因为最后一次达到了失败重试次数之后，就不再需要延时了，直接退出即可。
+
+			
+ProtobufRpcEngine.Invoker.invoke
+	...
+	client.call
+		getConnection
+			setupIOstreams
+				setupConnection
+					handleConnectionFailure				//连接失败会重试10次，每次延时1s。
+																				//具体根据connectionRetryPolicy设置，来自于getConnectionId中构造
+																				//ipc.client.connect.max.retries,默认10次
+																				//ipc.client.connect.retry.interval,默认1000ms
+																				
+	...
